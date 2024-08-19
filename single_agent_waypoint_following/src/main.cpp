@@ -12,11 +12,11 @@ int main(int argc, char ** argv)
 
     auto simulator = std::make_shared<Simulation>();
     rclcpp::Logger logger = simulator->get_logger();
-    logger.set_level(rclcpp::Logger::Level::Debug);
+    // logger.set_level(rclcpp::Logger::Level::Debug);
 
-    auto controller = std::make_shared<PIDController>();
+    auto controller = std::make_shared<PIDController>(1.0, 10.0);
     logger = controller->get_logger();
-    logger.set_level(rclcpp::Logger::Level::Debug);
+    // logger.set_level(rclcpp::Logger::Level::Debug);
 
     rclcpp::executors::MultiThreadedExecutor executor;
     executor.add_node(simulator);

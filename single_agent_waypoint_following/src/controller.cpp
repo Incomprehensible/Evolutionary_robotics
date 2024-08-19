@@ -6,9 +6,8 @@
 using namespace std::chrono_literals;
 using namespace std::placeholders;
 
-// Controller::Controller(rclcpp::Node* node)
-//     : node_(node), tf_buffer_(std::make_shared<rclcpp::Clock>()), tf_listener_(tf_buffer_)
-Controller::Controller(const rclcpp::NodeOptions & options, const std::string & node_name)
+template <typename T>
+Controller<T>::Controller(const rclcpp::NodeOptions & options, const std::string & node_name)
     : Node(node_name, options), tf_buffer_(std::make_shared<rclcpp::Clock>()), tf_listener_(tf_buffer_)
 {
     // TMP
@@ -31,10 +30,13 @@ Controller::Controller(const rclcpp::NodeOptions & options, const std::string & 
     angular_vel_ = {0, 0, 0};
 
     param_callback_handle_ = node_->add_on_set_parameters_callback(
-        std::bind(&Controller::param_change_callback, this, std::placeholders::_1));
+        std::bind(&Controller<T>::param_change_callback, this, std::placeholders::_1));
+
+    // service for configuration
+    this->config_service_ = node_->create_service<T>("set_config", std::bind(&Controller<T>::set_config, this, _1));
     
     // service for default speed setting
-    this->speed_service_ = node_->create_service<speed_interface::srv::SetSpeed>("set_speed", std::bind(&Controller::set_speed, this, _1));
+    this->speed_service_ = node_->create_service<agent_interface::srv::SetSpeed>("set_speed", std::bind(&Controller<T>::set_speed, this, _1));
 
     // timer_cb_group = node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     // this->timer_ = node_->create_wall_timer(100ms, std::bind(&Controller::control_cycle, this), timer_cb_group);
@@ -42,7 +44,7 @@ Controller::Controller(const rclcpp::NodeOptions & options, const std::string & 
 
     // Odometry Subscriber
     odom_sub_ = node_->create_subscription<nav_msgs::msg::Odometry>(
-        "/odom", 10, std::bind(&Controller::odom_callback, this, std::placeholders::_1));
+        "/odom", 10, std::bind(&Controller<T>::odom_callback, this, std::placeholders::_1));
 
     // Control velocity publisher
     vel_pub_ = node_->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
@@ -50,12 +52,13 @@ Controller::Controller(const rclcpp::NodeOptions & options, const std::string & 
     this->action_server_ = rclcpp_action::create_server<Setpoint>(
       node_,
       "go_to_setpoint",
-      std::bind(&Controller::handle_goal, this, _1, _2),
-      std::bind(&Controller::handle_cancel, this, _1),
-      std::bind(&Controller::handle_accepted, this, _1));
+      std::bind(&Controller<T>::handle_goal, this, _1, _2),
+      std::bind(&Controller<T>::handle_cancel, this, _1),
+      std::bind(&Controller<T>::handle_accepted, this, _1));
 }
 
-void Controller::odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
+template <typename T>
+void Controller<T>::odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
 {
     if (/*!node_->get_clock()->ros_time_is_active() ||*/ !tf_buffer_.canTransform("odom", "base_footprint", tf2::TimePointZero, tf2::durationFromSec(1.0))) {
         RCLCPP_INFO(node_->get_logger(), "Waiting for valid simulation time and map frame");
@@ -76,12 +79,14 @@ void Controller::odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
     }
 }
 
-geometry_msgs::msg::Pose::SharedPtr Controller::get_position()
+template <typename T>
+geometry_msgs::msg::Pose::SharedPtr Controller<T>::get_position()
 {
     return current_pose_;
 }
 
-void Controller::stop_robot()
+template <typename T>
+void Controller<T>::stop_robot()
 {
     linear_vel_.setX(0);
     linear_vel_.setY(0);
@@ -89,12 +94,14 @@ void Controller::stop_robot()
     send_velocity();
 }
 
-void Controller::set_parameters()
+template <typename T>
+void Controller<T>::set_parameters()
 {
     this->speed_ = node_->get_parameter("speed").as_double();
 }
 
-void Controller::set_speed(const std::shared_ptr<speed_interface::srv::SetSpeed::Request> request)
+template <typename T>
+void Controller<T>::set_speed(const std::shared_ptr<agent_interface::srv::SetSpeed::Request> request)
 {
     if (request->speed >= MAX_SPEED)
     {
@@ -107,7 +114,13 @@ void Controller::set_speed(const std::shared_ptr<speed_interface::srv::SetSpeed:
     RCLCPP_INFO(node_->get_logger(), "Set speed to: {%f}", this->speed_);
 }
 
-void Controller::control_cycle()
+template <class T>
+void Controller<T>::set_config(const std::shared_ptr<typename T::Request> request) {
+    config_ = request->config;
+}
+
+template <typename T>
+void Controller<T>::control_cycle()
 {
     if (goal_handle_->is_canceling()) {
         stop_robot();
@@ -131,12 +144,8 @@ void Controller::control_cycle()
             send_result();
 }
 
-// void Controller::set_goal(Simulation::Setpoint setpoint)
-// {
-//     this->goal_ = setpoint;
-// }
-
-rclcpp_action::GoalResponse Controller::handle_goal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const Setpoint::Goal> goal)
+template <typename T>
+rclcpp_action::GoalResponse Controller<T>::handle_goal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const Setpoint::Goal> goal)
 {
     RCLCPP_INFO(node_->get_logger(), "Received goal request.");
     (void)uuid;
@@ -144,20 +153,23 @@ rclcpp_action::GoalResponse Controller::handle_goal(const rclcpp_action::GoalUUI
     return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
 
-rclcpp_action::CancelResponse Controller::handle_cancel(const std::shared_ptr<GoalHandleSetpoint> goal_handle)
+template <typename T>
+rclcpp_action::CancelResponse Controller<T>::handle_cancel(const std::shared_ptr<GoalHandleSetpoint> goal_handle)
 {
     RCLCPP_INFO(node_->get_logger(), "Received request to cancel goal");
     (void)goal_handle;
     return rclcpp_action::CancelResponse::ACCEPT;
 }
 
-void Controller::handle_accepted(const std::shared_ptr<GoalHandleSetpoint> goal_handle)
+template <typename T>
+void Controller<T>::handle_accepted(const std::shared_ptr<GoalHandleSetpoint> goal_handle)
 {
     // this needs to return quickly to avoid blocking the executor, so spin up a new thread
     std::thread{std::bind(&Controller::execute, this, _1), goal_handle}.detach();
 }
 
-void Controller::send_feedback()
+template <typename T>
+void Controller<T>::send_feedback()
 {
     auto feedback = std::make_shared<Setpoint::Feedback>();
     feedback->current_pose = *(current_pose_.get());
@@ -166,7 +178,8 @@ void Controller::send_feedback()
 }
 
 // keep inner structure for stats bookkeeping
-void Controller::send_result()
+template <typename T>
+void Controller<T>::send_result()
 {
     auto result = std::make_shared<Setpoint::Result>();
     result->evaluation = stats_;
@@ -179,14 +192,16 @@ void Controller::send_result()
         goal_handle_->canceled(result);
 }
 
-void Controller::reset_goal()
+template <typename T>
+void Controller<T>::reset_goal()
 {
     goal_ = geometry_msgs::msg::Point();
     goal_handle_.reset();
     stats_ = Stats();
 }
 
-void Controller::execute(const std::shared_ptr<GoalHandleSetpoint> goal_handle)
+template <typename T>
+void Controller<T>::execute(const std::shared_ptr<GoalHandleSetpoint> goal_handle)
 {
     reset_goal();
     RCLCPP_INFO(node_->get_logger(), "Executing goal");
@@ -195,37 +210,9 @@ void Controller::execute(const std::shared_ptr<GoalHandleSetpoint> goal_handle)
     enabled_ = true;
     // if we put a timer instead, remove enabled_ and reset timer here 
     control_cycle();
-    // rclcpp::Rate loop_rate(1);
-    // auto feedback = std::make_shared<Setpoint::Feedback>();
-    // auto & sequence = feedback->partial_sequence;
-    // sequence.push_back(0);
-    // sequence.push_back(1);
-    // auto result = std::make_shared<Setpoint::Result>();
-
-    // for (int i = 1; (i < goal->order) && rclcpp::ok(); ++i) {
-      // Check if there is a cancel request
-    //   if (goal_handle->is_canceling()) {
-    //     result->sequence = sequence;
-    //     goal_handle->canceled(result);
-    //     RCLCPP_INFO(this->get_logger(), "Goal canceled");
-    //     return;
-    //   }
-    //   // Update sequence
-    //   sequence.push_back(sequence[i] + sequence[i - 1]);
-    //   // Publish feedback
-    //   goal_handle->publish_feedback(feedback);
-    //   RCLCPP_INFO(this->get_logger(), "Publish feedback");
-    //   loop_rate.sleep();
-    // }
-
-    // Check if goal is done
-    // if (rclcpp::ok()) {
-    //   result->sequence = sequence;
-    //   goal_handle->succeed(result);
-    //   RCLCPP_INFO(this->get_logger(), "Goal succeeded");
-    // }
   }
 
+// REMOVED
 // geometry_msgs::msg::TransformStamped::SharedPtr Controller::get_position()
 // {
 //     geometry_msgs::msg::TransformStamped odom2robot;
@@ -239,7 +226,8 @@ void Controller::execute(const std::shared_ptr<GoalHandleSetpoint> goal_handle)
 //     return std::make_shared<geometry_msgs::msg::TransformStamped>(std::move(odom2robot));
 // }
 
-void Controller::send_velocity()
+template <typename T>
+void Controller<T>::send_velocity()
 {
     geometry_msgs::msg::Twist cmd_vel = geometry_msgs::msg::Twist();
     cmd_vel.linear = tf2::toMsg(linear_vel_);
@@ -248,7 +236,8 @@ void Controller::send_velocity()
 }
 
 // callback for setting default speed via a ROS parameter
-rcl_interfaces::msg::SetParametersResult Controller::param_change_callback(const std::vector<rclcpp::Parameter> &params)
+template <typename T>
+rcl_interfaces::msg::SetParametersResult Controller<T>::param_change_callback(const std::vector<rclcpp::Parameter> &params)
 {
     auto result = rcl_interfaces::msg::SetParametersResult();
     result.successful = true;

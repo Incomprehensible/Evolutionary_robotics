@@ -22,18 +22,20 @@
 #include <tf2/utils.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
-#include "speed_interface/srv/set_speed.hpp" 
-#include "goal_interface/action/setpoint.hpp"
-#include "goal_interface/msg/stats.hpp"
+#include "agent_interface/srv/set_speed.hpp"
+#include "agent_interface/srv/set_config.hpp"
+#include "agent_interface/action/setpoint.hpp"
+#include "agent_interface/msg/stats.hpp"
 
 class Simulation : public rclcpp::Node
 {
     // TMP
+    const size_t P_ = 10;
     const double R = 3.0;
-    const size_t S = 10; // simulation runs
+    const size_t S = 5; // simulation runs
 
-    using Stats = goal_interface::msg::Stats;
-    using Setpoint = goal_interface::action::Setpoint;
+    using Stats = agent_interface::msg::Stats;
+    using Setpoint = agent_interface::action::Setpoint;
     using GoalHandleSetpoint = rclcpp_action::ClientGoalHandle<Setpoint>;
 
     public:
@@ -63,7 +65,10 @@ class Simulation : public rclcpp::Node
         // tf2_ros::TransformListener tf_listener_;
         std::vector<Stats> points_;
 
-        rclcpp_action::Client<Setpoint>::SharedPtr client_ptr_;
+        rclcpp::Client<agent_interface::srv::SetSpeed>::SharedPtr speed_client_;
+        rclcpp::Client<agent_interface::srv::SetConfig>::SharedPtr config_client_;
+        rclcpp_action::Client<Setpoint>::SharedPtr action_client_;
+
         rclcpp::TimerBase::SharedPtr timer_;
         rclcpp::CallbackGroup::SharedPtr timer_cb_group;
 

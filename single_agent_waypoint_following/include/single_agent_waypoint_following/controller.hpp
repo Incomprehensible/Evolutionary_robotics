@@ -19,18 +19,26 @@
 #include <tf2_ros/transform_listener.h>
 #include <tf2/utils.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <rcl_interfaces/msg/parameter_descriptor.hpp>
+#include <rclcpp/parameter.hpp>
+#include <angles/angles.h>
 
-#include "speed_interface/srv/set_speed.hpp" 
-#include "goal_interface/action/setpoint.hpp"
-#include "goal_interface/msg/stats.hpp"
+#include "agent_interface/srv/set_speed.hpp"
+#include "agent_interface/srv/set_config.hpp" 
+#include "agent_interface/action/setpoint.hpp"
+#include "agent_interface/msg/stats.hpp"
 
 #define MAX_SPEED 2.0
 #define DEFAULT_SPEED 1.0
 
+using namespace std::chrono_literals;
+using namespace std::placeholders;
+
+template <class T>
 class Controller : public rclcpp::Node
 {
-    using Stats = goal_interface::msg::Stats;
-    using Setpoint = goal_interface::action::Setpoint;
+    using Stats = agent_interface::msg::Stats;
+    using Setpoint = agent_interface::action::Setpoint;
     using GoalHandleSetpoint = rclcpp_action::ServerGoalHandle<Setpoint>;
 
     public:
@@ -38,22 +46,17 @@ class Controller : public rclcpp::Node
         // explicit Controller(rclcpp::Node*);
         void set_parameters();
         geometry_msgs::msg::Pose::SharedPtr get_position();
-        // void set_goal(Setpoint);
-        // void set_goal(Simulation::Setpoint);
-        // GoalStatus get_goal_status();
-        // GoalResult get_goal_result();
-        // virtual void reset() = 0;
-        // virtual void enable() = 0;
-        // virtual void disable() = 0;
 
     private:
         virtual void go_to_setpoint() = 0;
         virtual void set_stats() = 0;
+        // virtual void activate_config() = 0;
 
         void reset_goal();
         void control_cycle();
 
-        void set_speed(const std::shared_ptr<speed_interface::srv::SetSpeed::Request>);
+        void set_speed(const std::shared_ptr<agent_interface::srv::SetSpeed::Request>);
+        void set_config(const std::shared_ptr<typename T::Request>);
         rcl_interfaces::msg::SetParametersResult param_change_callback(const std::vector<rclcpp::Parameter>&);
         void odom_callback(const nav_msgs::msg::Odometry::SharedPtr);
 
@@ -71,7 +74,8 @@ class Controller : public rclcpp::Node
         rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr vel_pub_;
         rclcpp_action::Server<Setpoint>::SharedPtr action_server_;
         rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
-        rclcpp::Service<speed_interface::srv::SetSpeed>::SharedPtr speed_service_;
+        rclcpp::Service<agent_interface::srv::SetSpeed>::SharedPtr speed_service_;
+        rclcpp::Service<agent_interface::srv::SetConfig>::SharedPtr config_service_;
         // rclcpp::CallbackGroup::SharedPtr timer_cb_group;
 
     protected:
@@ -79,14 +83,14 @@ class Controller : public rclcpp::Node
         void send_velocity();
 
         // protected data
+        std::shared_ptr<typename T::Request> config_;
         rclcpp::Node* node_;
         bool enabled_; // in case we don't have a timer
         Stats stats_;
-        // use <geometry_msgs::msg::Point>?
-        // Simulation::Setpoint goal_;
         geometry_msgs::msg::Point goal_;
         geometry_msgs::msg::Pose::SharedPtr current_pose_;
         double speed_;
+        size_t total_cycles_;
         tf2::Vector3 linear_vel_; 
         tf2::Vector3 angular_vel_;
         tf2::Quaternion orientation_;
@@ -95,5 +99,259 @@ class Controller : public rclcpp::Node
         tf2_ros::Buffer tf_buffer_;
         tf2_ros::TransformListener tf_listener_;
 };
+
+template <typename T>
+Controller<T>::Controller(const rclcpp::NodeOptions & options, const std::string & node_name)
+    : Node(node_name, options), tf_buffer_(std::make_shared<rclcpp::Clock>()), tf_listener_(tf_buffer_)
+{
+    // TMP
+    node_ = this;
+
+    config_ = std::make_shared<typename T::Request>();
+
+    rcl_interfaces::msg::ParameterDescriptor speed_descriptor;
+    speed_descriptor.description = "Constant speed for the TurtleBot3";
+
+    node_->declare_parameter<double>("speed", DEFAULT_SPEED, speed_descriptor);
+    this->set_parameters();
+
+    enabled_ = false;
+
+    current_pose_ = std::make_shared<geometry_msgs::msg::Pose>();
+    goal_ = geometry_msgs::msg::Point();
+    goal_handle_ = nullptr;
+    stats_ = {};
+
+    linear_vel_ = {0, 0, 0};
+    angular_vel_ = {0, 0, 0};
+
+    param_callback_handle_ = node_->add_on_set_parameters_callback(
+        std::bind(&Controller<T>::param_change_callback, this, std::placeholders::_1));
+
+    // service for configuration
+    this->config_service_ = node_->create_service<T>("set_config", std::bind(&Controller<T>::set_config, this, _1));
+    
+    // service for default speed setting
+    this->speed_service_ = node_->create_service<agent_interface::srv::SetSpeed>("set_speed", std::bind(&Controller<T>::set_speed, this, _1));
+
+    // timer_cb_group = node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    // this->timer_ = node_->create_wall_timer(100ms, std::bind(&Controller::control_cycle, this), timer_cb_group);
+    // this->timer_->cancel();
+
+    // Odometry Subscriber
+    odom_sub_ = node_->create_subscription<nav_msgs::msg::Odometry>(
+        "/odom", 10, std::bind(&Controller<T>::odom_callback, this, std::placeholders::_1));
+
+    // Control velocity publisher
+    vel_pub_ = node_->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
+
+    this->action_server_ = rclcpp_action::create_server<Setpoint>(
+      node_,
+      "go_to_setpoint",
+      std::bind(&Controller<T>::handle_goal, this, _1, _2),
+      std::bind(&Controller<T>::handle_cancel, this, _1),
+      std::bind(&Controller<T>::handle_accepted, this, _1));
+    
+    total_cycles_ = 0;
+}
+
+template <typename T>
+void Controller<T>::odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
+{
+    if (/*!node_->get_clock()->ros_time_is_active() ||*/ !tf_buffer_.canTransform("odom", "base_footprint", tf2::TimePointZero, tf2::durationFromSec(1.0))) {
+        RCLCPP_INFO(node_->get_logger(), "Waiting for valid simulation time and map frame");
+        return;
+    }
+    // Transform current_pose to map frame
+    try {
+        geometry_msgs::msg::PoseStamped odom_pose;
+        odom_pose.header = msg->header;
+        odom_pose.pose = msg->pose.pose;
+        geometry_msgs::msg::PoseStamped map_pose;
+        tf_buffer_.transform(odom_pose, map_pose, "odom", tf2::durationFromSec(1.0));
+        current_pose_ = std::make_shared<geometry_msgs::msg::Pose>(map_pose.pose);
+        if (enabled_)
+            control_cycle();
+    } catch (const tf2::ExtrapolationException& ex) {
+        RCLCPP_ERROR(node_->get_logger(), "Extrapolation error when transforming pose: %s", ex.what());
+    }
+}
+
+template <typename T>
+geometry_msgs::msg::Pose::SharedPtr Controller<T>::get_position()
+{
+    return current_pose_;
+}
+
+template <typename T>
+void Controller<T>::stop_robot()
+{
+    linear_vel_.setX(0);
+    linear_vel_.setY(0);
+    angular_vel_.setZ(0);
+    send_velocity();
+}
+
+template <typename T>
+void Controller<T>::set_parameters()
+{
+    this->speed_ = node_->get_parameter("speed").as_double();
+}
+
+template <typename T>
+void Controller<T>::set_speed(const std::shared_ptr<agent_interface::srv::SetSpeed::Request> request)
+{
+    if (request->speed >= MAX_SPEED)
+    {
+        RCLCPP_WARN(node_->get_logger(), "Setting maximum supported speed: %f. Consider switching to lower speed to avoid operating your robot at critical conditions.", MAX_SPEED);
+        RCLCPP_WARN(node_->get_logger(), "Robot might behave in unstable manner. Consider increasing the tolerances if you want to run at maximum speed.");
+        this->speed_ = MAX_SPEED;
+    }
+    else
+        this->speed_ = request->speed;
+    RCLCPP_INFO(node_->get_logger(), "Set speed to: {%f}", this->speed_);
+}
+
+template <class T>
+void Controller<T>::set_config(const std::shared_ptr<typename T::Request> config) {
+    config_ = config;
+
+    RCLCPP_INFO(node_->get_logger(), "Set new configuration!");
+}
+
+template <typename T>
+void Controller<T>::control_cycle()
+{
+    if (goal_handle_->is_canceling()) {
+        stop_robot();
+        RCLCPP_INFO(node_->get_logger(), "Goal canceled/failed");
+        goto conclude_goal;
+    }
+
+    // does moving, stats set, reached check and set, stops robot
+    go_to_setpoint();
+
+    if (stats_.reached) {
+        RCLCPP_DEBUG(node_->get_logger(), "Goal succeeded");
+        goto conclude_goal;
+    }
+    return;
+
+    conclude_goal:
+        // if we put a timer instead, remove enabled_ and reset timer here 
+        enabled_ = false;
+        if (rclcpp::ok())
+            send_result();
+}
+
+template <typename T>
+rclcpp_action::GoalResponse Controller<T>::handle_goal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const Setpoint::Goal> goal)
+{
+    RCLCPP_INFO(node_->get_logger(), "Received goal request.");
+    (void)uuid;
+    (void)goal;
+    return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+}
+
+template <typename T>
+rclcpp_action::CancelResponse Controller<T>::handle_cancel(const std::shared_ptr<GoalHandleSetpoint> goal_handle)
+{
+    RCLCPP_INFO(node_->get_logger(), "Received request to cancel goal");
+    (void)goal_handle;
+    return rclcpp_action::CancelResponse::ACCEPT;
+}
+
+template <typename T>
+void Controller<T>::handle_accepted(const std::shared_ptr<GoalHandleSetpoint> goal_handle)
+{
+    // this needs to return quickly to avoid blocking the executor, so spin up a new thread
+    std::thread{std::bind(&Controller::execute, this, _1), goal_handle}.detach();
+}
+
+template <typename T>
+void Controller<T>::send_feedback()
+{
+    auto feedback = std::make_shared<Setpoint::Feedback>();
+    feedback->current_pose = *(current_pose_.get());
+    goal_handle_->publish_feedback(feedback);
+    RCLCPP_DEBUG(node_->get_logger(), "Publish feedback");
+}
+
+// keep inner structure for stats bookkeeping
+template <typename T>
+void Controller<T>::send_result()
+{
+    auto result = std::make_shared<Setpoint::Result>();
+    result->evaluation = stats_;
+    result->pose = *(current_pose_.get());
+    // auto & stats = result->evaluation;
+
+    if (stats_.reached)
+        goal_handle_->succeed(result);
+    else
+        goal_handle_->canceled(result);
+}
+
+template <typename T>
+void Controller<T>::reset_goal()
+{
+    goal_ = geometry_msgs::msg::Point();
+    goal_handle_.reset();
+    stats_ = Stats();
+}
+
+template <typename T>
+void Controller<T>::execute(const std::shared_ptr<GoalHandleSetpoint> goal_handle)
+{
+    reset_goal();
+    RCLCPP_DEBUG(node_->get_logger(), "Executing goal");
+    goal_handle_ = goal_handle;
+    goal_ = goal_handle->get_goal()->setpoint;
+    enabled_ = true;
+    // if we put a timer instead, remove enabled_ and reset timer here 
+    total_cycles_ = 0;
+    control_cycle();
+}
+
+template <typename T>
+void Controller<T>::send_velocity()
+{
+    geometry_msgs::msg::Twist cmd_vel = geometry_msgs::msg::Twist();
+    cmd_vel.linear = tf2::toMsg(linear_vel_);
+    cmd_vel.angular = tf2::toMsg(angular_vel_);
+    this->vel_pub_->publish(cmd_vel);
+}
+
+// callback for setting default speed via a ROS parameter
+template <typename T>
+rcl_interfaces::msg::SetParametersResult Controller<T>::param_change_callback(const std::vector<rclcpp::Parameter> &params)
+{
+    auto result = rcl_interfaces::msg::SetParametersResult();
+    result.successful = true;
+
+    for (const auto &param : params) 
+    {
+        // checking if the changed parameter is of the right type
+        if (param.get_name() == "speed" && param.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) 
+        {
+            if (param.as_double() >= MAX_SPEED)
+            {
+                RCLCPP_WARN(node_->get_logger(), "Setting maximum supported speed: %f. Consider switching to lower speed to avoid operating your robot at critical conditions.", param.as_double());
+                RCLCPP_WARN(node_->get_logger(), "Robot might behave in unstable manner. Consider increasing the tolerances if you want to run at maximum speed.");
+                this->speed_ = MAX_SPEED;
+            }
+            else {
+                this->speed_ = param.as_double();
+                RCLCPP_INFO(node_->get_logger(), "Parameter 'speed' has changed. The new value is: %f", param.as_double());
+            }
+        } 
+        else
+        {
+            result.successful = false;
+            result.reason = "Unsupported parameter";
+        }
+    } 
+    return result;
+}
 
 #endif

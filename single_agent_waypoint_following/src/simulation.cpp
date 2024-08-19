@@ -16,7 +16,9 @@ Simulation::Simulation(const rclcpp::NodeOptions & options, const std::string & 
     points_.resize(S);
     current_evaluation_ = Stats();
 
-    this->client_ptr_ = rclcpp_action::create_client<Setpoint>(this, "go_to_setpoint");
+    this->action_client_ = rclcpp_action::create_client<Setpoint>(this, "go_to_setpoint");
+    this->speed_client_ = this->create_client<agent_interface::srv::SetSpeed>("set_speed");
+    this->config_client_ = this->create_client<agent_interface::srv::SetConfig>("set_config");
 
     timer_cb_group = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     this->timer_ = this->create_wall_timer(150ms, std::bind(&Simulation::simulation_run, this), timer_cb_group);
@@ -25,12 +27,14 @@ Simulation::Simulation(const rclcpp::NodeOptions & options, const std::string & 
 double Simulation::get_fitness()
 {
     double f = 0;
-    double fail_penalty = 10.0; // TEMPORARY
+    double fail_penalty = 10.0; // TMP
+    double time_penalty = 0.15; // TMP
 
     for (const auto& stat : points_) {
         f += stat.distance_to_goal;
-        f += stat.total_cycles;
+        f += time_penalty * stat.total_cycles;
         f += stat.reached? 0 : fail_penalty;
+        RCLCPP_INFO(this->get_logger(), "dist_to_goal: {%f}, total_cycles: {%d}, reached: {%d}", stat.distance_to_goal, stat.total_cycles, stat.reached);
     }
     f /= points_.size();
     return 1 / f;
@@ -54,94 +58,136 @@ double Simulation::get_distance(geometry_msgs::msg::Point& p1, geometry_msgs::ms
     return std::sqrt(std::pow(p1.x - p2.x, 2) + std::pow(p1.y - p2.y, 2));
 }
 
+double generateRandom(double radius) {
+    // Generate a uniform random number between 0 and 1
+    std::random_device seed; // obtain a random number from hardware
+
+    // distribution over closed interval
+    std::uniform_real_distribution d(0.0, radius);
+    auto gen = std::bind(d, std::mt19937(seed()));
+    
+    return gen();
+}
+
 // currently evaluates just one instance of Controller population
 void Simulation::simulation_run()
 {
     this->timer_->cancel();
     rclcpp::Rate rate(1s);
-    double speed = 1.0; // TEMPORARY
+    double speed = 1.6; // TEMPORARY
     double allowance_time = 3.0; // TEMPORARY
 
-    for (size_t i=0; i<runs_; ++i) {
-        finished_ = false;
-
-        if (!this->client_ptr_->wait_for_action_server()) {
-            RCLCPP_ERROR(this->get_logger(), "Action server not available after waiting");
+    auto speed_req = std::make_shared<agent_interface::srv::SetSpeed::Request>();
+    speed_req->speed = speed;
+    while (!speed_client_->wait_for_service(1s)) {
+        if (!rclcpp::ok()) {
+            RCLCPP_ERROR(this->get_logger(), "Interrupted while waiting for the speed service. Exiting.");
             rclcpp::shutdown();
         }
-
-        auto goal_msg = Setpoint::Goal();
-        goal_msg.setpoint = generate_setpoint();
-
-        geometry_msgs::msg::TransformStamped::SharedPtr odom2robot_ptr;
-        while ((odom2robot_ptr = get_position()) == nullptr)
-            rate.sleep();
-        auto odom2robot = *(odom2robot_ptr.get());
-        geometry_msgs::msg::Point pose;
-        pose.x = odom2robot.transform.translation.x;
-        pose.y = odom2robot.transform.translation.y;
-        pose.z = 0;
-    
-        double dist = get_distance(goal_msg.setpoint, pose);
-
-        double timeout = dist / speed;
-        auto timeout_duration = std::chrono::duration<double>(timeout + allowance_time);
-
-        RCLCPP_INFO(this->get_logger(), "Sending goal...");
-
-        auto send_goal_options = rclcpp_action::Client<Setpoint>::SendGoalOptions();
-        send_goal_options.goal_response_callback = std::bind(&Simulation::goal_response_callback, this, _1);
-        send_goal_options.feedback_callback = std::bind(&Simulation::feedback_callback, this, _1, _2);
-        send_goal_options.result_callback = std::bind(&Simulation::result_callback, this, _1);
-        auto goal_handle_future = this->client_ptr_->async_send_goal(goal_msg, send_goal_options);
-
-        // Wait for the goal to be accepted or rejected
-        // if (rclcpp::spin_until_future_complete(this->get_node_base_interface(), goal_handle_future) != rclcpp::FutureReturnCode::SUCCESS)
-        // {
-        //     RCLCPP_ERROR(this->get_logger(), "Failed to send goal");
-        //     continue;
-        // }
-        auto goal_handle = goal_handle_future.get();
-        if (!goal_handle)
-        {
-            RCLCPP_ERROR(this->get_logger(), "Goal was rejected by the server");
-            continue;
-        }
-
-        auto start_time = std::chrono::steady_clock::now();
-
-        while (!finished_) {
-            auto current_time = std::chrono::steady_clock::now();
-            if (current_time - start_time >= timeout_duration)
-            {
-                RCLCPP_DEBUG(this->get_logger(), "Goal timeout! Canceling goal...");
-                auto cancel_future = this->client_ptr_->async_cancel_goal(goal_handle);
-                // if (rclcpp::spin_until_future_complete(this->get_node_base_interface(), cancel_future) != rclcpp::FutureReturnCode::SUCCESS)
-                // {
-                //     RCLCPP_ERROR(this->get_logger(), "Failed to cancel goal");
-                //     rclcpp::shutdown();
-                // }
-                auto cancel_response = cancel_future.get();
-                if (cancel_response->return_code == action_msgs::srv::CancelGoal_Response::ERROR_NONE)
-                    RCLCPP_INFO(this->get_logger(), "Goal successfully canceled");
-                else
-                    RCLCPP_WARN(this->get_logger(), "Goal failed to cancel");
-
-                break;
-            }
-            RCLCPP_DEBUG(this->get_logger(), "Waiting...:");
-            rate.sleep();
-        }
-        while (!finished_) rate.sleep();
-
-        if (!current_evaluation_.reached) {
-            // define penalty for goal failure
-            RCLCPP_DEBUG(this->get_logger(), "Goal fail!");
-        }
-
-        points_.push_back(current_evaluation_);
+        RCLCPP_INFO(this->get_logger(), "Speed service not available, waiting again...");
     }
-    RCLCPP_DEBUG(this->get_logger(), "Fitness: {%f}", get_fitness());
+    speed_client_->async_send_request(speed_req);
+
+    auto request = std::make_shared<agent_interface::srv::SetConfig::Request>();
+
+    for (size_t n=0; n<P_; ++n) {
+        // first controller runs with reference default values
+        if (n != 0) {
+            request->k_l = 1.0 + generateRandom(radius_*4);
+            request->k_ha = 5.0 + + generateRandom(radius_*4);
+            while (!config_client_->wait_for_service(1s)) {
+                if (!rclcpp::ok()) {
+                    RCLCPP_ERROR(this->get_logger(), "Interrupted while waiting for the configuration service. Exiting.");
+                    rclcpp::shutdown();
+                }
+                RCLCPP_INFO(this->get_logger(), "Configuration service not available, waiting again...");
+            }
+            config_client_->async_send_request(request);
+        }
+
+        for (size_t i=0; i<runs_; ++i) {
+            finished_ = false;
+
+            if (!this->action_client_->wait_for_action_server()) {
+                RCLCPP_ERROR(this->get_logger(), "Action server not available after waiting");
+                rclcpp::shutdown();
+            }
+
+            auto goal_msg = Setpoint::Goal();
+            goal_msg.setpoint = generate_setpoint();
+
+            geometry_msgs::msg::TransformStamped::SharedPtr odom2robot_ptr;
+            while ((odom2robot_ptr = get_position()) == nullptr)
+                rate.sleep();
+            auto odom2robot = *(odom2robot_ptr.get());
+            geometry_msgs::msg::Point pose;
+            pose.x = odom2robot.transform.translation.x;
+            pose.y = odom2robot.transform.translation.y;
+            pose.z = 0;
+    
+            double dist = get_distance(goal_msg.setpoint, pose);
+
+            double timeout = dist / speed;
+            auto timeout_duration = std::chrono::duration<double>(timeout + allowance_time);
+
+            RCLCPP_DEBUG(this->get_logger(), "Sending goal...");
+
+            auto send_goal_options = rclcpp_action::Client<Setpoint>::SendGoalOptions();
+            send_goal_options.goal_response_callback = std::bind(&Simulation::goal_response_callback, this, _1);
+            send_goal_options.feedback_callback = std::bind(&Simulation::feedback_callback, this, _1, _2);
+            send_goal_options.result_callback = std::bind(&Simulation::result_callback, this, _1);
+            auto goal_handle_future = this->action_client_->async_send_goal(goal_msg, send_goal_options);
+
+            // Wait for the goal to be accepted or rejected
+            // if (rclcpp::spin_until_future_complete(this->get_node_base_interface(), goal_handle_future) != rclcpp::FutureReturnCode::SUCCESS)
+            // {
+            //     RCLCPP_ERROR(this->get_logger(), "Failed to send goal");
+            //     continue;
+            // }
+            auto goal_handle = goal_handle_future.get();
+            if (!goal_handle)
+            {
+                RCLCPP_ERROR(this->get_logger(), "Goal was rejected by the server");
+                continue;
+            }
+
+            auto start_time = std::chrono::steady_clock::now();
+
+            while (!finished_) {
+                auto current_time = std::chrono::steady_clock::now();
+                if (current_time - start_time >= timeout_duration)
+                {
+                    RCLCPP_DEBUG(this->get_logger(), "Goal timeout! Canceling goal...");
+                    auto cancel_future = this->action_client_->async_cancel_goal(goal_handle);
+                    // if (rclcpp::spin_until_future_complete(this->get_node_base_interface(), cancel_future) != rclcpp::FutureReturnCode::SUCCESS)
+                    // {
+                    //     RCLCPP_ERROR(this->get_logger(), "Failed to cancel goal");
+                    //     rclcpp::shutdown();
+                    // }
+                    auto cancel_response = cancel_future.get();
+                    if (cancel_response->return_code == action_msgs::srv::CancelGoal_Response::ERROR_NONE)
+                        RCLCPP_DEBUG(this->get_logger(), "Goal successfully canceled");
+                    else
+                        RCLCPP_WARN(this->get_logger(), "Goal failed to cancel");
+
+                    break;
+                }
+                RCLCPP_DEBUG(this->get_logger(), "Waiting...:");
+                rate.sleep();
+            }
+            while (!finished_) rate.sleep();
+
+            if (!current_evaluation_.reached) {
+                // define penalty for goal failure
+                RCLCPP_DEBUG(this->get_logger(), "Goal fail!");
+            }
+
+            points_[i] = current_evaluation_;
+            // points_.push_back(current_evaluation_);
+        }
+        RCLCPP_INFO(this->get_logger(), "Candidate: K_l: {%f}, K_ha: {%f}, Fitness: {%f}", request->k_l, request->k_ha, get_fitness());
+        // points_.clear(); // tmp
+    }
 }
 
 void Simulation::goal_response_callback(std::shared_ptr<GoalHandleSetpoint> future)
@@ -150,13 +196,13 @@ void Simulation::goal_response_callback(std::shared_ptr<GoalHandleSetpoint> futu
     if (!goal_handle) {
         RCLCPP_ERROR(this->get_logger(), "Goal was rejected by server");
     } else {
-        RCLCPP_INFO(this->get_logger(), "Goal accepted by server, waiting for result");
+        RCLCPP_DEBUG(this->get_logger(), "Goal accepted by server, waiting for result");
     }
 }
 
 void Simulation::feedback_callback(GoalHandleSetpoint::SharedPtr, const std::shared_ptr<const Setpoint::Feedback> feedback)
 { 
-    RCLCPP_INFO(this->get_logger(), "reached: {x:%f, y:%f}", feedback->current_pose.position.x, feedback->current_pose.position.y);
+    RCLCPP_DEBUG(this->get_logger(), "reached: {x:%f, y:%f}", feedback->current_pose.position.x, feedback->current_pose.position.y);
 }
 
 void Simulation::result_callback(const GoalHandleSetpoint::WrappedResult & result)
@@ -169,7 +215,7 @@ void Simulation::result_callback(const GoalHandleSetpoint::WrappedResult & resul
             RCLCPP_ERROR(this->get_logger(), "Goal was aborted");
             return;
         case rclcpp_action::ResultCode::CANCELED:
-            RCLCPP_ERROR(this->get_logger(), "Goal was canceled");
+            RCLCPP_INFO(this->get_logger(), "Goal was canceled");
             break;
         default:
             RCLCPP_ERROR(this->get_logger(), "Unknown result code");
@@ -177,7 +223,7 @@ void Simulation::result_callback(const GoalHandleSetpoint::WrappedResult & resul
     }
 
     current_evaluation_ = result.result->evaluation;
-    RCLCPP_INFO(this->get_logger(), "Final pose reached: {x:%f, y:%f}", result.result->pose.position.x, result.result->pose.position.y);
+    RCLCPP_DEBUG(this->get_logger(), "Final pose reached: {x:%f, y:%f}", result.result->pose.position.x, result.result->pose.position.y);
     finished_ = true;
 }
 

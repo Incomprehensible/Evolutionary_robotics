@@ -10,14 +10,23 @@ using namespace std::placeholders;
 //     : Controller(node)
 // PIDController::PIDController() : Controller()
 PIDController::PIDController(const rclcpp::NodeOptions & options, const std::string & node_name)
-    : Controller(options, node_name)
+    : Controller<agent_interface::srv::SetConfig>(options, node_name)
 {
-    total_cycles_ = 0;
+    // total_cycles_ = 0;
     // max_cycles_ = max_cycles;
 
     // timer_cb_group = node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     // this->timer_ = node_->create_wall_timer(100ms, std::bind(&PIDController::control_cycle, this), timer_cb_group);
     // this->timer_->cancel();
+}
+
+PIDController::PIDController(const double K_l, const double K_ha)
+{
+    PIDController();
+    config_->k_l = K_l;
+    config_->k_ha = K_ha;
+    // K_l_ = K_l;
+    // K_ha_ = K_ha;
 }
 
 // PIDController::GoalStatus PIDController::get_goal_status()
@@ -82,7 +91,7 @@ double PIDController::get_linear_velocity(double x, double y) {
     // RCLCPP_DEBUG(node_->get_logger(), "Linear distance: %f", dist);
 
     if (abs(dist) > distanceTolerance) {
-        vel_x = K_l * dist;
+        vel_x = config_->k_l * dist;
         if (abs(vel_x) > this->speed_)
             vel_x = (dist > 0)? this->speed_ : this->speed_*-1;
     }
@@ -96,7 +105,7 @@ double PIDController::get_angular_velocity(double theta) {
     // RCLCPP_DEBUG(node_->get_logger(), "Angular distance: %f", theta);
 
     if (abs(theta) > headingAngleTolerance) {
-        vel_theta = K_ha * theta;
+        vel_theta = config_->k_ha * theta;
         if (abs(vel_theta) > this->speed_)
             vel_theta = (theta > 0)? this->speed_ : this->speed_*-1;
     }
@@ -107,8 +116,8 @@ void PIDController::go_to_setpoint()
 {
     // static double old_vel = 0.0;
     // in case we don't have a timer
-    if (!enabled_)
-        return;
+    assert(enabled_ == true);
+    
     total_cycles_++;
 
     // auto pose_ptr = get_position();
@@ -145,7 +154,7 @@ void PIDController::go_to_setpoint()
     {
         // angular_vel_.setZ(0);
         // // applying tiny back acceleration burst to weaken simulated robot's spontaneous drift after turning
-        // linear_vel_.setX(-1*old_vel*K_l);
+        // linear_vel_.setX(-1*old_vel*K_l_);
         // send_velocity();
         // linear_vel_.setX(0);
         // send_velocity();

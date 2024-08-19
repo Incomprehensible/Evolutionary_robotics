@@ -16,8 +16,7 @@ find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
 find_package(angles REQUIRED)
-find_package(speed_interface REQUIRED)
-find_package(goal_interface REQUIRED)
+find_package(agent_interface REQUIRED)
 
 cmake_minimum_required(VERSION 3.8)
 project(single_agent_waypoint_following)
@@ -38,8 +37,7 @@ find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
 find_package(angles REQUIRED)
-find_package(speed_interface REQUIRED)
-find_package(goal_interface REQUIRED)
+find_package(agent_interface REQUIRED)
 
 # Include directories
 include_directories(include)
@@ -65,9 +63,7 @@ ament_target_dependencies(simulation_component
     "tf2_ros"
     "tf2_geometry_msgs"
     "nav2_msgs"
-    "angles"
-    "speed_interface"
-    "goal_interface"
+    "agent_interface"
 )
 
 rclcpp_components_register_node(simulation_component PLUGIN "Simulation" EXECUTABLE simulation)
@@ -75,7 +71,7 @@ rclcpp_components_register_node(simulation_component PLUGIN "Simulation" EXECUTA
 
 # Build the Controller component
 add_library(controller_component SHARED
-  src/controller.cpp
+#   src/controller.cpp
   src/PID_controller.cpp)
 
 target_include_directories(controller_component PRIVATE
@@ -96,8 +92,7 @@ ament_target_dependencies(controller_component
     "tf2_geometry_msgs"
     "nav2_msgs"
     "angles"
-    "speed_interface"
-    "goal_interface"
+    "agent_interface"
 )
 
 rclcpp_components_register_node(controller_component PLUGIN "PIDController" EXECUTABLE controller)

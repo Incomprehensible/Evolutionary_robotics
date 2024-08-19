@@ -1,5 +1,5 @@
-#include <rclcpp/rclcpp.hpp>
-#include <memory>
+// #include <rclcpp/rclcpp.hpp>
+// #include <memory>
 #include "single_agent_waypoint_following/PID_controller.hpp"
 #include "single_agent_waypoint_following/simulation.hpp"
 
@@ -7,17 +7,20 @@ int main(int argc, char ** argv)
 {
     rclcpp::init(argc, argv);
 
-    const size_t T = 50;
-    const double radius = 3.0;
-    const size_t S = 10; // simulation runs
+    // const double radius = 3.0;
+    // const size_t S = 10; // simulation runs
 
-    auto node = std::make_shared<Simulation>(T, S, radius);
+    auto simulator = std::make_shared<Simulation>();
+    rclcpp::Logger logger = simulator->get_logger();
+    logger.set_level(rclcpp::Logger::Level::Debug);
 
-    rclcpp::Logger logger = node->get_logger();
+    auto controller = std::make_shared<PIDController>();
+    logger = controller->get_logger();
     logger.set_level(rclcpp::Logger::Level::Debug);
 
     rclcpp::executors::MultiThreadedExecutor executor;
-    executor.add_node(node);
+    executor.add_node(simulator);
+    executor.add_node(controller);
     executor.spin();
 
     rclcpp::shutdown();

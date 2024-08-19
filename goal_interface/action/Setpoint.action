@@ -1,0 +1,9 @@
+# Define the goal
+geometry_msgs/Point setpoint
+---
+# Define the result
+Stats evaluation
+geometry_msgs/Pose pose 
+---
+# Define the feedback
+geometry_msgs/Pose current_pose 

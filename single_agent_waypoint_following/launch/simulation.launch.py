@@ -16,7 +16,7 @@ def generate_launch_description():
         package="single_agent_waypoint_following",
         executable="NEAT_evolution",
         name='NEAT_evolution',
-        respawn=True,
+        # respawn=True,
     )
 
     ld.add_action(node)

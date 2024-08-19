@@ -45,11 +45,12 @@ class Controller : public rclcpp::Node
         explicit Controller(const rclcpp::NodeOptions & = rclcpp::NodeOptions(), const std::string& = "NEAT_controller");
         // explicit Controller(rclcpp::Node*);
         void set_parameters();
-        geometry_msgs::msg::Pose::SharedPtr get_position();
+        geometry_msgs::msg::PoseStamped::SharedPtr get_position();
 
     private:
         virtual void go_to_setpoint() = 0;
         virtual void set_stats() = 0;
+        virtual void reset_bookkeeping() = 0;
         // virtual void activate_config() = 0;
 
         void reset_goal();
@@ -88,9 +89,12 @@ class Controller : public rclcpp::Node
         bool enabled_; // in case we don't have a timer
         Stats stats_;
         geometry_msgs::msg::Point goal_;
-        geometry_msgs::msg::Pose::SharedPtr current_pose_;
+        geometry_msgs::msg::PoseStamped::SharedPtr current_pose_;
         double speed_;
         size_t total_cycles_;
+        double total_dist_;
+        double total_rot_;
+        double total_jerk_;
         tf2::Vector3 linear_vel_; 
         tf2::Vector3 angular_vel_;
         tf2::Quaternion orientation_;
@@ -117,7 +121,12 @@ Controller<T>::Controller(const rclcpp::NodeOptions & options, const std::string
 
     enabled_ = false;
 
-    current_pose_ = std::make_shared<geometry_msgs::msg::Pose>();
+    total_cycles_ = 0;
+    total_dist_ = 0.0;
+    total_rot_ = 0.0;
+    total_jerk_ = 0.0;
+
+    current_pose_ = std::make_shared<geometry_msgs::msg::PoseStamped>();
     goal_ = geometry_msgs::msg::Point();
     goal_handle_ = nullptr;
     stats_ = {};
@@ -152,7 +161,6 @@ Controller<T>::Controller(const rclcpp::NodeOptions & options, const std::string
       std::bind(&Controller<T>::handle_cancel, this, _1),
       std::bind(&Controller<T>::handle_accepted, this, _1));
     
-    total_cycles_ = 0;
 }
 
 template <typename T>
@@ -169,7 +177,7 @@ void Controller<T>::odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
         odom_pose.pose = msg->pose.pose;
         geometry_msgs::msg::PoseStamped map_pose;
         tf_buffer_.transform(odom_pose, map_pose, "odom", tf2::durationFromSec(1.0));
-        current_pose_ = std::make_shared<geometry_msgs::msg::Pose>(map_pose.pose);
+        current_pose_ = std::make_shared<geometry_msgs::msg::PoseStamped>(map_pose);
         if (enabled_)
             control_cycle();
     } catch (const tf2::ExtrapolationException& ex) {
@@ -178,7 +186,7 @@ void Controller<T>::odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg)
 }
 
 template <typename T>
-geometry_msgs::msg::Pose::SharedPtr Controller<T>::get_position()
+geometry_msgs::msg::PoseStamped::SharedPtr Controller<T>::get_position()
 {
     return current_pose_;
 }
@@ -283,7 +291,7 @@ void Controller<T>::send_result()
 {
     auto result = std::make_shared<Setpoint::Result>();
     result->evaluation = stats_;
-    result->pose = *(current_pose_.get());
+    result->pose = (*(current_pose_.get())).pose;
     // auto & stats = result->evaluation;
 
     if (stats_.reached)
@@ -304,12 +312,16 @@ template <typename T>
 void Controller<T>::execute(const std::shared_ptr<GoalHandleSetpoint> goal_handle)
 {
     reset_goal();
+    reset_bookkeeping();
     RCLCPP_DEBUG(node_->get_logger(), "Executing goal");
     goal_handle_ = goal_handle;
     goal_ = goal_handle->get_goal()->setpoint;
     enabled_ = true;
     // if we put a timer instead, remove enabled_ and reset timer here 
     total_cycles_ = 0;
+    total_dist_ = 0.0;
+    total_rot_ = 0.0;
+    total_jerk_ = 0.0;
     control_cycle();
 }
 

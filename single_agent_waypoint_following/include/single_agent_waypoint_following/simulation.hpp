@@ -45,6 +45,9 @@ class Simulation : public rclcpp::Node
 
     private:
         geometry_msgs::msg::Point generate_setpoint();
+        std::vector<geometry_msgs::msg::Point> generate_setpoints();
+        geometry_msgs::msg::Point generate_equidistant_setpoint();
+        std::vector<geometry_msgs::msg::Point> generate_equidistant_setpoints();
         // void goal_response_callback(std::shared_future<GoalHandleSetpoint::SharedPtr>);
         void goal_response_callback(std::shared_ptr<GoalHandleSetpoint> future);
         void feedback_callback(GoalHandleSetpoint::SharedPtr, const std::shared_ptr<const Setpoint::Feedback>);

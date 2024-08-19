@@ -28,9 +28,14 @@ class PIDController: public Controller<agent_interface::srv::SetConfig>
         double get_angular_velocity(double);
         void go_to_setpoint() override;
         void set_stats() override;
+        void reset_bookkeeping() override;
 
         // private data
         // size_t total_cycles_;
+        geometry_msgs::msg::PoseStamped old_pose_;
+        double old_yaw_;
+        double old_vel_theta_;
+        double old_alpha_theta_;
 };
 
 #endif

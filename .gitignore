@@ -55,3 +55,4 @@ CATKIN_IGNORE
 *.vscode*
 TODO.md
 *log
+good_cand*

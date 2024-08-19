@@ -29,15 +29,44 @@ double Simulation::get_fitness()
     double f = 0;
     double fail_penalty = 10.0; // TMP
     double time_penalty = 0.15; // TMP
+    double dist_penalty = 10.0; // TMP
+    // double travel_penalty = 10.0;
 
     for (const auto& stat : points_) {
-        f += stat.distance_to_goal;
+        f += dist_penalty * stat.distance_to_goal;
         f += time_penalty * stat.total_cycles;
+        f += stat.total_rotations / 2*M_PI;
+        f += stat.distance_traveled / radius_; // for non-equidistant setpoints need to normalize!
+        f += stat.total_jerk / 1000.0;
         f += stat.reached? 0 : fail_penalty;
-        RCLCPP_INFO(this->get_logger(), "dist_to_goal: {%f}, total_cycles: {%d}, reached: {%d}", stat.distance_to_goal, stat.total_cycles, stat.reached);
+        RCLCPP_INFO(this->get_logger(), "dist_to_goal:{%f}, total_cycles:{%d}, distance_traveled:{%f}\ntotal_rotations:{%f}, total_jerk:{%f}, reached:{%d}", stat.distance_to_goal, stat.total_cycles, stat.distance_traveled, stat.total_rotations, stat.total_jerk, stat.reached);
     }
     f /= points_.size();
     return 1 / f;
+}
+
+std::vector<geometry_msgs::msg::Point> Simulation::generate_setpoints()
+{
+    std::vector<geometry_msgs::msg::Point> p;
+    p.resize(runs_);
+
+    for (size_t i=0; i<runs_; ++i) {
+        p[i] = generate_setpoint();
+    }
+
+    return p;
+}
+
+std::vector<geometry_msgs::msg::Point> Simulation::generate_equidistant_setpoints()
+{
+    std::vector<geometry_msgs::msg::Point> p;
+    p.resize(runs_);
+
+    for (size_t i=0; i<runs_; ++i) {
+        p[i] = generate_equidistant_setpoint();
+    }
+
+    return p;
 }
 
 geometry_msgs::msg::TransformStamped::SharedPtr Simulation::get_position()
@@ -74,8 +103,10 @@ void Simulation::simulation_run()
 {
     this->timer_->cancel();
     rclcpp::Rate rate(1s);
-    double speed = 1.6; // TEMPORARY
-    double allowance_time = 3.0; // TEMPORARY
+    double speed = 1.8; // TMP
+    double allowance_time = 4.0; // TMP
+
+    auto setpoints = generate_equidistant_setpoints();
 
     auto speed_req = std::make_shared<agent_interface::srv::SetSpeed::Request>();
     speed_req->speed = speed;
@@ -113,9 +144,6 @@ void Simulation::simulation_run()
                 rclcpp::shutdown();
             }
 
-            auto goal_msg = Setpoint::Goal();
-            goal_msg.setpoint = generate_setpoint();
-
             geometry_msgs::msg::TransformStamped::SharedPtr odom2robot_ptr;
             while ((odom2robot_ptr = get_position()) == nullptr)
                 rate.sleep();
@@ -125,6 +153,12 @@ void Simulation::simulation_run()
             pose.y = odom2robot.transform.translation.y;
             pose.z = 0;
     
+            auto goal_msg = Setpoint::Goal();
+            goal_msg.setpoint.x = setpoints[i].x + pose.x;
+            goal_msg.setpoint.y = setpoints[i].y + pose.y;
+            goal_msg.setpoint.z = setpoints[i].z + pose.z;
+            // goal_msg.setpoint = generate_setpoint();
+
             double dist = get_distance(goal_msg.setpoint, pose);
 
             double timeout = dist / speed;
@@ -267,48 +301,73 @@ double generateEdgeBiasedRandom(double radius) {
     return random_number;
 }
 
+geometry_msgs::msg::Point Simulation::generate_equidistant_setpoint()
+{
+    // randomly generate dx, dy, dyaw
+    double theta = generateRandom(2*M_PI);
+
+    geometry_msgs::msg::Point goal;
+    goal.x = radius_ * std::cos(theta);
+    goal.y = radius_ * std::sin(theta);
+    goal.z = 0;
+    return goal;
+}
+
 geometry_msgs::msg::Point Simulation::generate_setpoint()
 {
-    rclcpp::Rate rate(1s);
-
-    geometry_msgs::msg::TransformStamped::SharedPtr odom2robot_ptr;
-    // geometry_msgs::msg::Pose::SharedPtr odom2robot_ptr;
-    // simulated robot is not spawned yet - wait
-    while ((odom2robot_ptr = get_position()) == nullptr) {
-        rate.sleep();
-    }
-
-    auto odom2robot = *(odom2robot_ptr.get());
-
-    double x_origin = odom2robot.transform.translation.x;
-    double y_origin = odom2robot.transform.translation.y;
-    // double x_origin = odom2robot.position.x;
-    // double y_origin = odom2robot.position.y;
-
-    tf2::Quaternion orientation;
-
-    // for generating random orientation - not needed now
-    // orientation.setX(odom2robot.orientation.x);
-    // orientation.setY(odom2robot.orientation.y);
-    // orientation.setZ(odom2robot.orientation.z);
-    // orientation.setW(odom2robot.orientation.w);
-
-    orientation.setX(odom2robot.transform.rotation.x);
-    orientation.setY(odom2robot.transform.rotation.y);
-    orientation.setZ(odom2robot.transform.rotation.z);
-    orientation.setW(odom2robot.transform.rotation.w);
-    
-    double yaw_origin = tf2::getYaw(orientation);
-
     // randomly generate dx, dy, dyaw
     double dx = generateEdgeBiasedRandom(radius_);
     double dy = generateEdgeBiasedRandom(radius_);
 
     geometry_msgs::msg::Point goal;
-    goal.x = x_origin + dx;
-    goal.y = y_origin + dy;
+    goal.x = dx;
+    goal.y = dy;
     goal.z = 0;
     return goal;
 }
+
+// geometry_msgs::msg::Point Simulation::generate_setpoint()
+// {
+//     rclcpp::Rate rate(1s);
+
+//     geometry_msgs::msg::TransformStamped::SharedPtr odom2robot_ptr;
+//     // geometry_msgs::msg::Pose::SharedPtr odom2robot_ptr;
+//     // simulated robot is not spawned yet - wait
+//     while ((odom2robot_ptr = get_position()) == nullptr) {
+//         rate.sleep();
+//     }
+
+//     auto odom2robot = *(odom2robot_ptr.get());
+
+//     double x_origin = odom2robot.transform.translation.x;
+//     double y_origin = odom2robot.transform.translation.y;
+//     // double x_origin = odom2robot.position.x;
+//     // double y_origin = odom2robot.position.y;
+
+//     tf2::Quaternion orientation;
+
+//     // for generating random orientation - not needed now
+//     // orientation.setX(odom2robot.orientation.x);
+//     // orientation.setY(odom2robot.orientation.y);
+//     // orientation.setZ(odom2robot.orientation.z);
+//     // orientation.setW(odom2robot.orientation.w);
+
+//     orientation.setX(odom2robot.transform.rotation.x);
+//     orientation.setY(odom2robot.transform.rotation.y);
+//     orientation.setZ(odom2robot.transform.rotation.z);
+//     orientation.setW(odom2robot.transform.rotation.w);
+    
+//     double yaw_origin = tf2::getYaw(orientation);
+
+//     // randomly generate dx, dy, dyaw
+//     double dx = generateEdgeBiasedRandom(radius_);
+//     double dy = generateEdgeBiasedRandom(radius_);
+
+//     geometry_msgs::msg::Point goal;
+//     goal.x = x_origin + dx;
+//     goal.y = y_origin + dy;
+//     goal.z = 0;
+//     return goal;
+// }
 
 RCLCPP_COMPONENTS_REGISTER_NODE(Simulation)

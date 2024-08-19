@@ -2,22 +2,15 @@
 #include <rcl_interfaces/msg/parameter_descriptor.hpp>
 #include <rclcpp/parameter.hpp>
 #include <angles/angles.h>
+#include <float.h>
 
 using namespace std::chrono_literals;
 using namespace std::placeholders;
 
-// PIDController::PIDController(rclcpp::Node* node)
-//     : Controller(node)
-// PIDController::PIDController() : Controller()
 PIDController::PIDController(const rclcpp::NodeOptions & options, const std::string & node_name)
     : Controller<agent_interface::srv::SetConfig>(options, node_name)
 {
-    // total_cycles_ = 0;
-    // max_cycles_ = max_cycles;
-
-    // timer_cb_group = node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
-    // this->timer_ = node_->create_wall_timer(100ms, std::bind(&PIDController::control_cycle, this), timer_cb_group);
-    // this->timer_->cancel();
+    reset_bookkeeping();
 }
 
 PIDController::PIDController(const double K_l, const double K_ha)
@@ -25,50 +18,28 @@ PIDController::PIDController(const double K_l, const double K_ha)
     PIDController();
     config_->k_l = K_l;
     config_->k_ha = K_ha;
-    // K_l_ = K_l;
-    // K_ha_ = K_ha;
 }
 
-// PIDController::GoalStatus PIDController::get_goal_status()
-// {
-//     return goal_status_;
-// }
+void PIDController::reset_bookkeeping()
+{
+    old_pose_ = geometry_msgs::msg::PoseStamped();
+    old_yaw_ = 0.0;
+    old_vel_theta_ = 0.0;
+    old_alpha_theta_ = 0.0;
+}
 
-// PIDController::GoalResult PIDController::get_goal_result()
-// {
-//     return goal_result_;
-// }
-
-// void PIDController::enable()
-// {
-//     goal_status_ = ONGOING;
-//     this->timer_->reset();
-// }
-
-// void PIDController::reset()
-// {
-//     total_cycles_ = 0;
-//     goal_status_ = EMPTY;
-// }
-
+// move to Controller?
 void PIDController::set_stats()
 {
-    // rclcpp::Rate rate(1s);
-
-    // geometry_msgs::msg::Pose::SharedPtr pose_ptr = nullptr;
-    // while ((pose_ptr = get_position()) == nullptr)
-    //     rate.sleep();
-    // auto odom2robot = *(odom2robot_ptr.get());
-
-    // double x = odom2robot.transform.translation.x;
-    // double y = odom2robot.transform.translation.y;
     assert(current_pose_ != nullptr);
-    double x = current_pose_->position.x;
-    double y = current_pose_->position.y;
+    double x = current_pose_->pose.position.x;
+    double y = current_pose_->pose.position.y;
 
     stats_.distance_to_goal = std::sqrt(std::pow(goal_.x - x, 2) + std::pow(goal_.y - y, 2));
-    // stats_.distance_traveled = total_dist_;
+    stats_.distance_traveled = total_dist_;
     stats_.total_cycles = total_cycles_;
+    stats_.total_rotations = total_rot_;
+    stats_.total_jerk = total_jerk_;
     stats_.speed = speed_;
     
     RCLCPP_DEBUG(node_->get_logger(), "Performance: {%ld, %f}", total_cycles_, stats_.distance_to_goal);
@@ -79,11 +50,6 @@ void PIDController::set_stats()
 double PIDController::normalize_angle(double angle) {
     return std::remainder(angle, 2.0 * M_PI);
 }
-
-// void PIDController::set_goal(Simulation::Setpoint setpoint)
-// {
-//     this->goal_ = setpoint;
-// }
 
 double PIDController::get_linear_velocity(double x, double y) {
     double vel_x = 0;
@@ -112,24 +78,27 @@ double PIDController::get_angular_velocity(double theta) {
     return vel_theta;
 }
 
+inline bool is_zero(double x)
+{
+    return std::fabs(x) <= DBL_EPSILON;
+}
+
 void PIDController::go_to_setpoint()
 {
-    // static double old_vel = 0.0;
     // in case we don't have a timer
     assert(enabled_ == true);
-    
+
     total_cycles_++;
 
-    // auto pose_ptr = get_position();
-    // static_assert(pose_ptr != nullptr);
-    // if (pose_ptr == nullptr)
-    //     return;
-    // auto pose = *(pose_ptr.get());
     assert(current_pose_ != nullptr);
-    auto pose = *(current_pose_.get());
+    auto pose_stamped = *(current_pose_.get());
+    auto pose = pose_stamped.pose;
 
     double x = pose.position.x;
     double y = pose.position.y;
+
+    if (!is_zero(old_pose_.pose.position.x) && !is_zero(old_pose_.pose.position.y))
+        total_dist_ += std::sqrt(std::pow(x - old_pose_.pose.position.x, 2) + std::pow(y - old_pose_.pose.position.y, 2));
 
     orientation_.setX(pose.orientation.x);
     orientation_.setY(pose.orientation.y);
@@ -138,6 +107,9 @@ void PIDController::go_to_setpoint()
     
     double yaw;
     yaw = tf2::getYaw(orientation_);
+
+    if (!is_zero(old_yaw_))
+        total_rot_ += std::abs(yaw-old_yaw_);
     
     RCLCPP_DEBUG(node_->get_logger(), "x,y: {%f %f}", x, y);
     RCLCPP_DEBUG(node_->get_logger(), "Desired position: {%f %f}", goal_.x, goal_.y);
@@ -148,16 +120,9 @@ void PIDController::go_to_setpoint()
     double yaw_diff = angles::shortest_angular_distance(yaw, yaw_desired);
 
     double vel_x = get_linear_velocity(x_diff, y_diff);
-    // old_vel = vel_x;
     linear_vel_.setX(vel_x);
     if (vel_x == 0)
     {
-        // angular_vel_.setZ(0);
-        // // applying tiny back acceleration burst to weaken simulated robot's spontaneous drift after turning
-        // linear_vel_.setX(-1*old_vel*K_l_);
-        // send_velocity();
-        // linear_vel_.setX(0);
-        // send_velocity();
         stop_robot();
         stats_.reached = true;
         
@@ -169,7 +134,20 @@ void PIDController::go_to_setpoint()
         angular_vel_.setZ(vel_theta);
         send_velocity();
     }
+
+    double dt = (pose_stamped.header.stamp.sec-old_pose_.header.stamp.sec) + (pose_stamped.header.stamp.nanosec-old_pose_.header.stamp.nanosec)/1e9;
+    double alpha_theta = (angular_vel_.getZ() - old_vel_theta_) / dt;
+        // total_jerk_ += std::abs((angular_vel_.getZ()-old_vel_theta_)/std::pow(dt, 2));
+    total_jerk_ += std::abs((alpha_theta - old_alpha_theta_) / dt);
+    RCLCPP_DEBUG(node_->get_logger(), "total_jerk: {%f}", total_jerk_);
+    RCLCPP_DEBUG(node_->get_logger(), "dt: {%f}", dt);
+    
     set_stats();
+    // update bookkeeping vars
+    old_yaw_ = yaw;
+    old_pose_ = pose_stamped;
+    old_alpha_theta_ = alpha_theta;
+    old_vel_theta_ = angular_vel_.getZ();
 }
 
 RCLCPP_COMPONENTS_REGISTER_NODE(PIDController)

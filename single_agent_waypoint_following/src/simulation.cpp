@@ -5,16 +5,19 @@ using namespace std::chrono_literals;
 using namespace std::placeholders;
 
 Simulation::Simulation(const rclcpp::NodeOptions & options, const std::string & node_name)
-: Node(node_name, options), tf_buffer_(std::make_shared<rclcpp::Clock>()), tf_listener_(tf_buffer_)
+: Node(node_name, options), tf_buffer_(std::make_shared<rclcpp::Clock>()), tf_listener_(tf_buffer_),
+    evolver_(P_, R*4, {1.0, 5.0})
 {
-    // this->controller_ = std::make_shared<Controller>(this);
     // TMP
     this->runs_ = S;
     this->radius_ = R;
+    this->desired_fitness_ = F;
 
     this->finished_ = false;
     points_.resize(S);
     current_evaluation_ = Stats();
+
+    evolver_.init_population();
 
     this->action_client_ = rclcpp_action::create_client<Setpoint>(this, "go_to_setpoint");
     this->speed_client_ = this->create_client<agent_interface::srv::SetSpeed>("set_speed");
@@ -87,16 +90,16 @@ double Simulation::get_distance(geometry_msgs::msg::Point& p1, geometry_msgs::ms
     return std::sqrt(std::pow(p1.x - p2.x, 2) + std::pow(p1.y - p2.y, 2));
 }
 
-double generateRandom(double radius) {
-    // Generate a uniform random number between 0 and 1
-    std::random_device seed; // obtain a random number from hardware
+// double generateRandom(double radius) {
+//     // Generate a uniform random number between 0 and 1
+//     std::random_device seed; // obtain a random number from hardware
 
-    // distribution over closed interval
-    std::uniform_real_distribution d(0.0, radius);
-    auto gen = std::bind(d, std::mt19937(seed()));
+//     // distribution over closed interval
+//     std::uniform_real_distribution d(0.0, radius);
+//     auto gen = std::bind(d, std::mt19937(seed()));
     
-    return gen();
-}
+//     return gen();
+// }
 
 // currently evaluates just one instance of Controller population
 void Simulation::simulation_run()
@@ -105,6 +108,10 @@ void Simulation::simulation_run()
     rclcpp::Rate rate(1s);
     double speed = 1.8; // TMP
     double allowance_time = 4.0; // TMP
+
+    // evolver_.init_population();
+    std::vector<Genome<double, 2>>& population = evolver_.get_population();
+    assert(population.size() == P_);
 
     auto setpoints = generate_equidistant_setpoints();
 
@@ -122,10 +129,14 @@ void Simulation::simulation_run()
     auto request = std::make_shared<agent_interface::srv::SetConfig::Request>();
 
     for (size_t n=0; n<P_; ++n) {
+        Genome<double, 2>& p = population[n];
         // first controller runs with reference default values
-        if (n != 0) {
-            request->k_l = 1.0 + generateRandom(radius_*4);
-            request->k_ha = 5.0 + + generateRandom(radius_*4);
+        // if (n != 0) {
+            // TMP REFERENCE
+            // request->k_l = 1.0 + generateRandom(radius_*4);
+            // request->k_ha = 5.0 + + generateRandom(radius_*4);
+            request->k_l = p.genes_[0].raw_value;
+            request->k_ha = p.genes_[1].raw_value;
             while (!config_client_->wait_for_service(1s)) {
                 if (!rclcpp::ok()) {
                     RCLCPP_ERROR(this->get_logger(), "Interrupted while waiting for the configuration service. Exiting.");
@@ -134,7 +145,7 @@ void Simulation::simulation_run()
                 RCLCPP_INFO(this->get_logger(), "Configuration service not available, waiting again...");
             }
             config_client_->async_send_request(request);
-        }
+        // }
 
         for (size_t i=0; i<runs_; ++i) {
             finished_ = false;
@@ -219,8 +230,20 @@ void Simulation::simulation_run()
             points_[i] = current_evaluation_;
             // points_.push_back(current_evaluation_);
         }
-        RCLCPP_INFO(this->get_logger(), "Candidate: K_l: {%f}, K_ha: {%f}, Fitness: {%f}", request->k_l, request->k_ha, get_fitness());
+        double fitness = get_fitness();
+        p.fitness = fitness;
+        RCLCPP_INFO(this->get_logger(), "Candidate: K_l: {%f}, K_ha: {%f}, Fitness: {%f}", request->k_l, request->k_ha, fitness);
         // points_.clear(); // tmp
+    }
+    
+    double best_fitness = evolver_.rank_candidates();
+    RCLCPP_INFO(this->get_logger(), "Best Fitness: {%f}", best_fitness);
+
+    if (best_fitness < desired_fitness_)
+    {
+        RCLCPP_INFO(this->get_logger(), "Generating new population...");
+        evolver_.generate_new_population();
+        return this->timer_->reset();
     }
 }
 

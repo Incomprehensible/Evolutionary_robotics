@@ -27,12 +27,15 @@
 #include "agent_interface/action/setpoint.hpp"
 #include "agent_interface/msg/stats.hpp"
 
+#include "evolver.hpp"
+
 class Simulation : public rclcpp::Node
 {
     // TMP
-    const size_t P_ = 10;
+    const size_t P_ = 6; // 10
     const double R = 3.0;
-    const size_t S = 5; // simulation runs
+    const size_t S = 6; // simulation runs
+    const double F = 0.08;
 
     using Stats = agent_interface::msg::Stats;
     using Setpoint = agent_interface::action::Setpoint;
@@ -56,9 +59,13 @@ class Simulation : public rclcpp::Node
         geometry_msgs::msg::TransformStamped::SharedPtr get_position();
 
         // private data
+        Evolver<double, 2> evolver_;
         bool finished_;
+
+        // TMP
         size_t runs_;
         double radius_;
+        double desired_fitness_;
 
         // std::shared_ptr<Controller> controller_;
         Stats current_evaluation_;

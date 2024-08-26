@@ -28,7 +28,7 @@
 #include "agent_interface/action/setpoint.hpp"
 #include "agent_interface/msg/stats.hpp"
 
-#define MAX_SPEED 2.0
+#define MAX_SPEED 3.5
 #define DEFAULT_SPEED 1.0
 
 using namespace std::chrono_literals;
@@ -290,6 +290,9 @@ template <typename T>
 void Controller<T>::send_result()
 {
     auto result = std::make_shared<Setpoint::Result>();
+    // average some values
+    stats_.total_rotations /= total_cycles_;
+    stats_.total_jerk /= total_cycles_;
     result->evaluation = stats_;
     result->pose = (*(current_pose_.get())).pose;
     // auto & stats = result->evaluation;

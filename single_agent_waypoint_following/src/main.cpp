@@ -3,6 +3,9 @@
 #include "single_agent_waypoint_following/PID_controller.hpp"
 #include "single_agent_waypoint_following/simulation.hpp"
 
+using MyGenome = PGenome<double, 2>;
+RCLCPP_COMPONENTS_REGISTER_NODE(Simulation<MyGenome>)
+
 int main(int argc, char ** argv)
 {
     rclcpp::init(argc, argv);
@@ -10,7 +13,7 @@ int main(int argc, char ** argv)
     // const double radius = 3.0;
     // const size_t S = 10; // simulation runs
 
-    auto simulator = std::make_shared<Simulation>();
+    auto simulator = std::make_shared<Simulation<MyGenome>>();
     rclcpp::Logger logger = simulator->get_logger();
     // logger.set_level(rclcpp::Logger::Level::Debug);
 

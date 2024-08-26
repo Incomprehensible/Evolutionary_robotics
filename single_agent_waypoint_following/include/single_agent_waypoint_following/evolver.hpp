@@ -7,34 +7,20 @@
 #include <unordered_set>
 #include <queue>
 
-#include "genome.hpp"
+#include "P_genome.hpp"
 
-// template <typename T>
-// double generateRandom(T radius) {
-//     std::random_device seed;
-
-//     // distribution over closed interval
-//     std::uniform_real_distribution d(0.0, (double)radius);
-//     auto gen = std::bind(d, std::mt19937(seed()));
-    
-//     return gen();
-// }
-
-template <typename T, size_t Length>
+template <class G>
 class Evolver
 {
+    using GeneType = typename G::GeneType;
+    static constexpr size_t GeneLength = G::GeneLength;
+
     struct Candidates {
         size_t first;
         size_t second;
         double combined_fitness;
 
         public:
-            // Candidates(size_t first, size_t second, double f) {
-            //     this->first = first;
-            //     this->second = second;
-            //     this->combined_fitness = f;
-            // }
-
             bool operator() (Candidates& c1, Candidates& c2)
             {
                 return c1.combined_fitness < c2.combined_fitness;
@@ -42,17 +28,17 @@ class Evolver
     };
 
     public:
-        Evolver(size_t size, double limit, const std::vector<T>& seed) : limit_(limit), seed_(seed) {
+        Evolver(size_t size, GeneType limit, const std::vector<GeneType>& seed) : limit_(limit), seed_(seed) {
             population.resize(size);
         }
 
         void init_population() {
             for (size_t i=0; i<population.size(); ++i) {
-                population[i] = generate_random_genome();
+                population[i] = G::generate_random_genome(seed_, limit_);
             }
         }
 
-        std::vector<Genome<T, Length>>& get_population()
+        std::vector<G>& get_population()
         {
             return this->population;
         } 
@@ -64,8 +50,6 @@ class Evolver
         std::priority_queue<Candidates, std::vector<Candidates>, Candidates> generate_fittest_pairs(size_t n) {
             std::priority_queue<Candidates, std::vector<Candidates>, Candidates> pairs;
 
-            // for (size_t i=0; i<population.size(); ++i) {
-            //     for (size_t j=i+1; j<population.size(); ++j) {
             // Start from the end of the sorted vector
             for (size_t i = n - 1; i > 0; --i) {
                 for (size_t j = i - 1; j < n; --j) {
@@ -75,9 +59,8 @@ class Evolver
                     cand.second = j;
                     cand.combined_fitness = fitness_combined;
                     pairs.push(cand);
-                    // pairs.push({i, j, fitness_combined});
-                    if (pairs.size() == n - 1) // the last will be replicated
-                        return pairs;
+                    // if (pairs.size() == n - 1) // the last will be replicated
+                    //     return pairs;
                 }
             }
 
@@ -87,27 +70,25 @@ class Evolver
         double rank_candidates()
         {
             // ascending order due to Genome comparison operator definition
-            std::sort(population.begin(), population.end(), Genome<T, Length>::compare);
+            std::sort(population.begin(), population.end(), G::compare);
             return population[population.size()-1].fitness;
         }
 
         void generate_new_population() {
-            // // ascending order due to Genome comparison operator definition
-            // std::sort(population.begin(), population.end(), Genome<T, Length>::compare);
-
             // priority queue is descending
             std::priority_queue<Candidates, std::vector<Candidates>, Candidates> pairs = generate_fittest_pairs(population.size());
 
-            std::vector<Genome<T, Length>> new_population;
+            std::vector<G> new_population;
 
-            // for (size_t i=0; i<population.size()-1; ++i) {
-            //     new_population[i] = population[i].crossover(population[i+1]);
-            // }
-            while (!pairs.empty()) {
+            while (new_population.size() != (population.size()-1) && !pairs.empty()) {
                 const auto& pair = pairs.top();
                 RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Pair: {1st:%ld, 2nd:%ld, f:%f}", pair.first, pair.second, pair.combined_fitness);
 
-                new_population.push_back(population[pair.first].crossover(population[pair.second]));
+                G p = population[pair.first].crossover(population[pair.second]);
+                if (utils::generateChance())
+                    p.mutate();
+                new_population.push_back(p);
+                // new_population.push_back(population[pair.first].crossover(population[pair.second]));
                 pairs.pop();
             }
 
@@ -117,21 +98,21 @@ class Evolver
             population = new_population;
         }
 
-        std::vector<Genome<T, Length>> population;
+        std::vector<G> population;
 
     private:
-        Genome<T, Length> generate_random_genome() {
-            std::array<T, Length> genes;
+        // G generate_random_genome() {
+        //     std::array<T, Length> genes;
 
-            for (size_t i=0; i<Length; ++i) {
-                genes[i] = seed_[i] + generateRandom(limit_);
-            }
-            return Genome<T, Length>(genes);
-        }
+        //     for (size_t i=0; i<Length; ++i) {
+        //         genes[i] = seed_[i] + generateRandom(limit_);
+        //     }
+        //     return G(genes);
+        // }
 
         // private data
-        std::vector<T> seed_;
-        T limit_;
+        GeneType limit_;
+        std::vector<GeneType> seed_;
 };
 
 #endif

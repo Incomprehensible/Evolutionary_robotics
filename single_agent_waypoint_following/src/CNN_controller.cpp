@@ -1,4 +1,4 @@
-#include "single_agent_waypoint_following/PID_controller.hpp"
+#include "single_agent_waypoint_following/CNN_controller.hpp"
 #include <rcl_interfaces/msg/parameter_descriptor.hpp>
 #include <rclcpp/parameter.hpp>
 #include <angles/angles.h>
@@ -7,35 +7,32 @@
 using namespace std::chrono_literals;
 using namespace std::placeholders;
 
-PIDController::PIDController(const rclcpp::NodeOptions & options, const std::string & node_name)
-    : Controller(options, node_name), K_l_(0.0), K_ha_(0.0)
+CNNController::CNNController(const rclcpp::NodeOptions & options, const std::string & node_name)
+    : Controller(options, node_name), cnn_(nullptr)
 {
     reset_bookkeeping();
 }
 
-PIDController::PIDController(const double K_l, const double K_ha)
-{
-    PIDController();
-    K_l_ = K_l;
-    K_ha_ = K_ha;
-}
-
-void PIDController::build_phenotype()
-{
-    K_l_ = config_->pconf.k_l;
-    K_ha_ = config_->pconf.k_ha;
-}
-
-void PIDController::reset_bookkeeping()
+void CNNController::reset_bookkeeping()
 {
     old_pose_ = geometry_msgs::msg::PoseStamped();
     old_yaw_ = 0.0;
+    old_vel_x_ = 0.0;
     old_vel_theta_ = 0.0;
     old_alpha_theta_ = 0.0;
 }
 
+void CNNController::build_phenotype()
+{
+    if (config_ != nullptr)
+    {
+        cnn_ = std::make_shared<CNN>(config_->cnnconf.num_inputs, config_->cnnconf.num_outputs, 
+            config_->cnnconf.num_hidden, config_->cnnconf.neurons_per_hidden, config_->cnnconf.weights);
+    }
+}
+
 // move to Controller?
-void PIDController::set_stats()
+void CNNController::set_stats()
 {
     assert(current_pose_ != nullptr);
     double x = current_pose_->pose.position.x;
@@ -46,41 +43,17 @@ void PIDController::set_stats()
     stats_.total_cycles = total_cycles_;
     stats_.total_rotations = total_rot_;
     stats_.total_jerk = total_jerk_;
+    stats_.total_lin_speed += std::abs(old_vel_x_);
+    stats_.lin_speed = old_vel_x_;
+    stats_.ang_speed = old_vel_theta_;
     
     RCLCPP_DEBUG(node_->get_logger(), "Performance: {%ld, %f}", total_cycles_, stats_.distance_to_goal);
 }
 
 
 // used for setpoints initialization
-double PIDController::normalize_angle(double angle) {
+double CNNController::normalize_angle(double angle) {
     return std::remainder(angle, 2.0 * M_PI);
-}
-
-double PIDController::get_linear_velocity(double x, double y) {
-    double vel_x = 0;
-    double dist = std::sqrt(std::pow(x, 2) + std::pow(y, 2));
-    // RCLCPP_DEBUG(node_->get_logger(), "Linear distance: %f", dist);
-
-    if (abs(dist) > distanceTolerance) {
-        vel_x = K_l_ * dist;
-        if (abs(vel_x) > this->speed_)
-            vel_x = (dist > 0)? this->speed_ : this->speed_*-1;
-    }
-    return vel_x;
-}
-
-// heading angle control
-double PIDController::get_angular_velocity(double theta) {
-    double vel_theta = 0;
-
-    // RCLCPP_DEBUG(node_->get_logger(), "Angular distance: %f", theta);
-
-    if (abs(theta) > headingAngleTolerance) {
-        vel_theta = K_ha_ * theta;
-        if (abs(vel_theta) > this->speed_)
-            vel_theta = (theta > 0)? this->speed_ : this->speed_*-1;
-    }
-    return vel_theta;
 }
 
 inline bool is_zero(double x)
@@ -88,7 +61,7 @@ inline bool is_zero(double x)
     return std::fabs(x) <= DBL_EPSILON;
 }
 
-void PIDController::go_to_setpoint()
+void CNNController::go_to_setpoint()
 {
     // in case we don't have a timer
     assert(enabled_ == true);
@@ -124,21 +97,45 @@ void PIDController::go_to_setpoint()
     double yaw_desired = atan2(y_diff, x_diff);
     double yaw_diff = angles::shortest_angular_distance(yaw, yaw_desired);
 
-    double vel_x = get_linear_velocity(x_diff, y_diff);
-    linear_vel_.setX(vel_x);
-    if (vel_x == 0)
-    {
-        stop_robot();
+    double vel_x;
+    double vel_theta;
+    // tmp
+    double dist = std::sqrt(std::pow(x_diff, 2) + std::pow(y_diff, 2));
+    if (abs(dist) <= distanceTolerance) {
+        // stop_robot();
         stats_.reached = true;
         
         RCLCPP_DEBUG(node_->get_logger(), "Goal success!");
     }
-    else
-    {
-        double vel_theta = get_angular_velocity(yaw_diff);
+    // else {
+        std::vector<double> inputs = {x_diff, y_diff, yaw_diff};
+
+        assert(cnn_ != nullptr);
+        auto outputs = cnn_->update(inputs);
+
+        vel_x = outputs[0] * MAX_SPEED;
+        vel_theta = outputs[1] * MAX_SPEED;
+
+        if (abs(vel_x) > this->speed_)
+            vel_x = (vel_x > 0)? this->speed_ : this->speed_*-1;
+        if (abs(vel_theta) > this->speed_)
+            vel_theta = (vel_theta > 0)? this->speed_ : this->speed_*-1;
+
+        RCLCPP_DEBUG(node_->get_logger(), "vel_x:{%f}, vel_theta:{%f}", vel_x, vel_theta);
+
+        linear_vel_.setX(vel_x);
         angular_vel_.setZ(vel_theta);
         send_velocity();
-    }
+
+        // doesn't work - we dont have goal success
+        // if (is_zero(vel_x) == 0 && is_zero(vel_theta))
+        // {
+        //     stop_robot();
+        //     stats_.reached = true;
+
+        //     RCLCPP_DEBUG(node_->get_logger(), "Goal success!");
+        // }
+    // }
 
     double dt = (pose_stamped.header.stamp.sec-old_pose_.header.stamp.sec) + (pose_stamped.header.stamp.nanosec-old_pose_.header.stamp.nanosec)/1e9;
     double alpha_theta = (angular_vel_.getZ() - old_vel_theta_) / dt;
@@ -147,10 +144,12 @@ void PIDController::go_to_setpoint()
     RCLCPP_DEBUG(node_->get_logger(), "total_jerk: {%f}", total_jerk_);
     RCLCPP_DEBUG(node_->get_logger(), "dt: {%f}", dt);
     
-    set_stats();
     // update bookkeeping vars
+    old_vel_x_ = vel_x;
+    old_vel_theta_ = vel_theta;
+
+    set_stats();
     old_yaw_ = yaw;
     old_pose_ = pose_stamped;
     old_alpha_theta_ = alpha_theta;
-    old_vel_theta_ = angular_vel_.getZ();
 }

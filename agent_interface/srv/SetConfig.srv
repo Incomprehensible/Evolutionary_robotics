@@ -1,4 +1,4 @@
-# TMP
-float64 k_l
-float64 k_ha
+PConfig pconf
+# CNN-controller settings
+CNNConfig cnnconf
 ---

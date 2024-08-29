@@ -10,6 +10,9 @@ template <typename T, size_t Length>
 class PGenome: public Genome<T, Length, PGenome<T, Length>>
 {
     public:
+
+    static constexpr double MutationRate = 0.15;
+
     PGenome(): Genome<T, Length, PGenome>() {}
     PGenome(const std::array<T, Length>& genes) : Genome<T, Length, PGenome>(genes) {}
 
@@ -94,14 +97,39 @@ class PGenome: public Genome<T, Length, PGenome<T, Length>>
             return new_genome;
         }
 
-        // static PGenome<T, Length> generate_random_genome(const std::vector<T>& seed, T limit) {
-        //     std::array<T, Length> genes;
+        void crossover_impl(const Genome<T, Length, PGenome>& other, Genome<T, Length, PGenome>& child1, Genome<T, Length, PGenome>& child2)
+        {
+            // create the offspring
+            for (size_t i=0; i<Length; ++i)
+            {
+                if (i % 2 == 0) {
+                    child1.genes_[i].raw_value = this->genes_[i].raw_value;
+                    child2.genes_[i].raw_value = other.genes_[i].raw_value;
+                }
+                else {
+                    child1.genes_[i].raw_value = other.genes_[i].raw_value;
+                    child2.genes_[i].raw_value = this->genes_[i].raw_value;
+                }
+            }
 
-        //     for (size_t i=0; i<Length; ++i) {
-        //         genes[i] = seed[i] + utils::generateRandom(limit);
-        //     }
-        //     return PGenome<T, Length>(genes);
-        // }
+            return;
+        }
+
+        void set_request_impl(std::shared_ptr<agent_interface::srv::SetConfig::Request>& request)
+        {
+            request->pconf.k_l = this->genes_[0].raw_value;
+            request->pconf.k_ha = this->genes_[1].raw_value;
+
+            RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Candidate: K_l: {%f}, K_ha: {%f}, Fitness: {%f}", request->pconf.k_l, request->pconf.k_ha, this->fitness);
+        }
+
+        static PGenome<T, Length> generate_random_genome_impl(std::shared_ptr<agent_interface::srv::SetConfig::Request>& config) {
+            std::array<T, Length> genes;
+            genes[0] = config->pconf.k_l;
+            genes[1] = config->pconf.k_ha;
+
+            return PGenome<T, Length>(genes);
+        }
 };
 
 #endif

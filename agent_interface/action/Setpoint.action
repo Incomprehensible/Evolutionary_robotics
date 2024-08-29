@@ -6,4 +6,4 @@ Stats evaluation
 geometry_msgs/Pose pose 
 ---
 # Define the feedback
-geometry_msgs/Pose current_pose 
+geometry_msgs/PoseStamped current_pose 

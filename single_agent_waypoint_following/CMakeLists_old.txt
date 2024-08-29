@@ -1,0 +1,252 @@
+cmake_minimum_required(VERSION 3.8)
+project(single_agent_waypoint_following)
+
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
+# find dependencies
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(rclcpp_components REQUIRED)
+find_package(rcl_interfaces REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
+find_package(nav2_msgs REQUIRED)
+find_package(angles REQUIRED)
+find_package(agent_interface REQUIRED)
+
+cmake_minimum_required(VERSION 3.8)
+project(single_agent_waypoint_following)
+
+# Add compiler options
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
+# Find dependencies
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(rclcpp_components REQUIRED)
+find_package(rcl_interfaces REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
+find_package(nav2_msgs REQUIRED)
+find_package(angles REQUIRED)
+find_package(agent_interface REQUIRED)
+
+# Include directories
+include_directories(include)
+
+# Build the Simulation component
+add_library(simulation_component SHARED
+  src/simulation.cpp)
+
+target_include_directories(simulation_component PRIVATE
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+
+target_compile_definitions(simulation_component
+    PRIVATE "SINGLE_AGENT_WAYPOINT_FOLLOWING_BUILDING_DLL")
+
+ament_target_dependencies(simulation_component
+    "rclcpp"
+    "rclcpp_components"
+    "rcl_interfaces"
+    "std_msgs"
+    "geometry_msgs"
+    "tf2"
+    "tf2_ros"
+    "tf2_geometry_msgs"
+    "nav2_msgs"
+    "agent_interface"
+)
+
+rclcpp_components_register_node(simulation_component PLUGIN "Simulation" EXECUTABLE simulation)
+# rclcpp_components_register_nodes(simulation_component "single_agent_waypoint_following::Simulation")
+
+# Build the Controller component
+add_library(controller_component SHARED
+  src/controller.cpp
+  src/PID_controller.cpp
+  src/CNN.cpp
+  src/CNN_controller.cpp)
+
+target_include_directories(controller_component PRIVATE
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+
+target_compile_definitions(controller_component
+    PRIVATE "SINGLE_AGENT_WAYPOINT_FOLLOWING_BUILDING_DLL")
+
+ament_target_dependencies(controller_component
+    "rclcpp"
+    "rclcpp_components"
+    "rcl_interfaces"
+    "std_msgs"
+    "geometry_msgs"
+    "tf2"
+    "tf2_ros"
+    "tf2_geometry_msgs"
+    "nav2_msgs"
+    "angles"
+    "agent_interface"
+)
+
+rclcpp_components_register_node(controller_component PLUGIN "CNNController" EXECUTABLE controller)
+
+# rclcpp_components_register_nodes(controller_component "single_agent_waypoint_following::PIDController")
+
+# Install the components
+install(TARGETS
+    simulation_component
+    controller_component
+    ARCHIVE DESTINATION lib
+    LIBRARY DESTINATION lib
+    RUNTIME DESTINATION bin
+)
+
+# Build the NEAT_evolution executable
+add_executable(NEAT_evolution
+    src/main.cpp)
+
+target_link_libraries(NEAT_evolution
+    simulation_component
+    controller_component
+)
+
+ament_target_dependencies(NEAT_evolution
+  "rclcpp"
+)
+
+install(TARGETS
+    NEAT_evolution
+    DESTINATION lib/${PROJECT_NAME}
+)
+
+# Install launch files
+install(DIRECTORY
+    launch
+    DESTINATION share/${PROJECT_NAME}/)
+
+# add_executable(NEAT_evolution src/main.cpp src/controller.cpp src/PID_controller.cpp src/simulation.cpp)
+# target_include_directories(NEAT_evolution PUBLIC
+#     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+#     $<INSTALL_INTERFACE:include>)
+
+# target_compile_features(NEAT_evolution PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
+# ament_target_dependencies(
+#     NEAT_evolution
+#     "rclcpp"
+#     "rcl_interfaces"
+#     "std_msgs"
+#     "geometry_msgs"
+#     "tf2"
+#     "tf2_ros"
+#     "tf2_geometry_msgs"
+#     "nav2_msgs"
+#     "angles"
+#     "speed_interface"
+#     "goal_interface"
+# )
+
+# include_directories(include)
+
+# add_library(simulation SHARED
+#   src/simulation.cpp)
+
+# target_include_directories(simulation PRIVATE
+#   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+#   $<INSTALL_INTERFACE:include>)
+
+# target_compile_definitions(simulation
+#     PRIVATE "NEAT_EVOLUTION_BUILDING_DLL")
+
+# ament_target_dependencies(simulation
+#     "rclcpp"
+#     "rcl_interfaces"
+#     "std_msgs"
+#     "geometry_msgs"
+#     "tf2"
+#     "tf2_ros"
+#     "tf2_geometry_msgs"
+#     "nav2_msgs"
+#     "angles"
+#     "speed_interface"
+#     "goal_interface"
+# )
+
+# rclcpp_components_register_node(simulation PLUGIN "Simulation" EXECUTABLE simulation_node)
+
+# add_library(controller SHARED
+#   src/controller.cpp src/PID_controller.cpp)
+
+# target_include_directories(controller PRIVATE
+#   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+#   $<INSTALL_INTERFACE:include>)
+
+# target_compile_definitions(controller
+#     PRIVATE "NEAT_EVOLUTION_BUILDING_DLL")
+
+# ament_target_dependencies(controller
+#     "rclcpp"
+#     "rcl_interfaces"
+#     "std_msgs"
+#     "geometry_msgs"
+#     "tf2"
+#     "tf2_ros"
+#     "tf2_geometry_msgs"
+#     "nav2_msgs"
+#     "angles"
+#     "speed_interface"
+#     "goal_interface"
+# )
+
+# rclcpp_components_register_node(controller PLUGIN "Controller" EXECUTABLE controller_node)
+
+# install(TARGETS
+#     simulation
+#     controller
+#     ARCHIVE DESTINATION lib
+#     LIBRARY DESTINATION lib
+#     RUNTIME DESTINATION bin
+# )
+
+# add_executable(NEAT_evolution
+#     src/main.cpp)
+
+# target_link_libraries(NEAT_evolution
+#     simulation
+#     controller
+# )
+
+# ament_target_dependencies(NEAT_evolution
+#   "rclcpp"
+# )
+
+# install(TARGETS
+#     NEAT_evolution
+#     DESTINATION lib/${PROJECT_NAME}
+# )
+
+# install(DIRECTORY
+#     launch
+#     DESTINATION share/${PROJECT_NAME}/)
+
+if(BUILD_TESTING)
+  find_package(ament_lint_auto REQUIRED)
+  # the following line skips the linter which checks for copyrights
+  # comment the line when a copyright and license is added to all source files
+  set(ament_cmake_copyright_FOUND TRUE)
+  # the following line skips cpplint (only works in a git repo)
+  # comment the line when this package is in a git repo and when
+  # a copyright and license is added to all source files
+  set(ament_cmake_cpplint_FOUND TRUE)
+  ament_lint_auto_find_test_dependencies()
+endif()
+
+ament_package()

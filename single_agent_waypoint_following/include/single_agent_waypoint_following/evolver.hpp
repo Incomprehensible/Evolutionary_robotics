@@ -7,6 +7,7 @@
 #include <unordered_set>
 #include <queue>
 
+#include "CNN_genome.hpp"
 #include "P_genome.hpp"
 
 template <class G>
@@ -35,6 +36,12 @@ class Evolver
         void init_population() {
             for (size_t i=0; i<population.size(); ++i) {
                 population[i] = G::generate_random_genome(seed_, limit_);
+            }
+        }
+
+        void init_population_from_config(std::shared_ptr<agent_interface::srv::SetConfig::Request>& config) {
+            for (size_t i=0; i<population.size(); ++i) {
+                population[i] = G::generate_random_genome(config);
             }
         }
 
@@ -84,13 +91,39 @@ class Evolver
                 const auto& pair = pairs.top();
                 RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Pair: {1st:%ld, 2nd:%ld, f:%f}", pair.first, pair.second, pair.combined_fitness);
 
-                G p = population[pair.first].crossover(population[pair.second]);
-                if (utils::generateChance())
-                    p.mutate();
-                new_population.push_back(p);
-                // new_population.push_back(population[pair.first].crossover(population[pair.second]));
+                // tmp
+                RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Parents:");
+                population[pair.first].print_genes();
+                population[pair.second].print_genes();
+                //
+                G p1 = population[pair.first];
+                G p2 = population[pair.second];
+                population[pair.first].crossover(population[pair.second], p1, p2);
+                // if (utils::generateChance(G::MutationRate))
+                //     p1.mutate();
+                // if (utils::generateChance(G::MutationRate))
+                //     p2.mutate();
+
+                // tmp
+                RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Children:");
+                p1.print_genes();
+                p2.print_genes();
+                //
+
+                new_population.push_back(p1);
+                new_population.push_back(p2);
                 pairs.pop();
+
+                // alternative mutation
+                // G p = population[pair.first].crossover(population[pair.second]);
+                // if (utils::generateChance(G::MutationRate))
+                //     p.mutate();
+                // new_population.push_back(p);
+                // pairs.pop();
             }
+            // TODO: fix even numbers
+            // RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Population size: %ld", population.size());
+            // RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "New population size: %ld", new_population.size());
 
             // replication of the fittest
             new_population.push_back(population[population.size()-1]);
@@ -101,15 +134,6 @@ class Evolver
         std::vector<G> population;
 
     private:
-        // G generate_random_genome() {
-        //     std::array<T, Length> genes;
-
-        //     for (size_t i=0; i<Length; ++i) {
-        //         genes[i] = seed_[i] + generateRandom(limit_);
-        //     }
-        //     return G(genes);
-        // }
-
         // private data
         GeneType limit_;
         std::vector<GeneType> seed_;

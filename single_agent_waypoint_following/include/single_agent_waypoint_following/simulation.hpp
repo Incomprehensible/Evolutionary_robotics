@@ -23,7 +23,7 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 #include "agent_interface/srv/set_speed.hpp"
-#include "agent_interface/srv/set_config.hpp"
+// #include "agent_interface/srv/set_config.hpp"
 #include "agent_interface/action/setpoint.hpp"
 #include "agent_interface/msg/stats.hpp"
 
@@ -36,9 +36,9 @@ template <class G>
 class Simulation : public rclcpp::Node
 {
     // TMP
-    const size_t P_ = 10;
-    const double R = 7.0; // 3.0;
-    const size_t S = 8; // simulation runs
+    const size_t P_ = 11;// 101;
+    const double R = 4.0;//7.0;
+    const size_t S = 1;//7; // simulation runs
     const double F = 0.08;
 
     using Stats = agent_interface::msg::Stats;
@@ -46,14 +46,14 @@ class Simulation : public rclcpp::Node
     using GoalHandleSetpoint = rclcpp_action::ClientGoalHandle<Setpoint>;
 
     public:
-        explicit Simulation(const rclcpp::NodeOptions & = rclcpp::NodeOptions(), const std::string& = "NEAT_simulator");
+        Simulation(const rclcpp::NodeOptions & = rclcpp::NodeOptions(), const std::string& = "NEAT_simulator");
+        Simulation(std::shared_ptr<agent_interface::srv::SetConfig::Request>);
+        // void set_config(std::shared_ptr<agent_interface::srv::SetConfig::Request>&);
         void simulation_run();
         double get_fitness();
 
     private:
-        geometry_msgs::msg::Point generate_setpoint();
         std::vector<geometry_msgs::msg::Point> generate_setpoints();
-        geometry_msgs::msg::Point generate_equidistant_setpoint();
         std::vector<geometry_msgs::msg::Point> generate_equidistant_setpoints();
         // void goal_response_callback(std::shared_future<GoalHandleSetpoint::SharedPtr>);
         void goal_response_callback(std::shared_ptr<GoalHandleSetpoint> future);
@@ -63,6 +63,7 @@ class Simulation : public rclcpp::Node
         geometry_msgs::msg::TransformStamped::SharedPtr get_position();
 
         // private data
+        // std::shared_ptr<agent_interface::srv::SetConfig::Request> config_;
         Evolver<G> evolver_;
         bool finished_;
 
@@ -95,6 +96,8 @@ template <class G>
 Simulation<G>::Simulation(const rclcpp::NodeOptions & options, const std::string & node_name)
 : Node(node_name, options), evolver_(P_, R*4, {1.0, 5.0}), tf_buffer_(std::make_shared<rclcpp::Clock>()), tf_listener_(tf_buffer_)
 {
+    assert(this->get_parameter("use_sim_time").as_bool() == true);
+
     // TMP
     this->runs_ = S;
     this->radius_ = R;
@@ -104,35 +107,67 @@ Simulation<G>::Simulation(const rclcpp::NodeOptions & options, const std::string
     points_.resize(S);
     current_evaluation_ = Stats();
 
-    evolver_.init_population();
-
     this->action_client_ = rclcpp_action::create_client<Setpoint>(this, "go_to_setpoint");
     this->speed_client_ = this->create_client<agent_interface::srv::SetSpeed>("set_speed");
     this->config_client_ = this->create_client<agent_interface::srv::SetConfig>("set_config");
 
+    // timer_cb_group = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    // this->timer_ = this->create_wall_timer(150ms, std::bind(&Simulation<G>::simulation_run, this), timer_cb_group);
+}
+
+
+template <class G>
+Simulation<G>::Simulation(std::shared_ptr<agent_interface::srv::SetConfig::Request> conf): Simulation()
+{
+    if (conf != nullptr)
+        evolver_.init_population_from_config(conf);
+    else
+        evolver_.init_population();
+    
     timer_cb_group = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     this->timer_ = this->create_wall_timer(150ms, std::bind(&Simulation<G>::simulation_run, this), timer_cb_group);
+    // this->timer_ = this->create_timer(
+    //     this->get_clock(),  // This ensures the timer uses the node's clock, which is set to use simulated time.
+    //     5ms,
+    //     std::bind(&Simulation<G>::simulation_run, this),
+    //     timer_cb_group
+    // );
+    // rclcpp::create_timer(this, this->get_clock(), 5ms, std::bind(&Simulation<G>::simulation_run, this), timer_cb_group);
 }
+
+// template <class G>
+// void Simulation<G>::set_config(std::shared_ptr<agent_interface::srv::SetConfig::Request>& config)
+// {
+//     this->config_ = config;
+// }
 
 template <class G>
 double Simulation<G>::get_fitness()
 {
     double f = 0;
-    double fail_penalty = 10.0; // TMP
+    double ang_speed_penalty = 1.0;
+    double lin_speed_penalty = 1.0;
+    double fail_penalty = 60.0; // TMP
     double time_penalty = 0.15; // TMP
-    double dist_penalty = 10.0; // TMP
+    double dist_penalty = 25.0; // TMP
     double jerk_penalty = 1.5;
+    double SPEED_THRESHOLD = 1.0;
+    double low_speed_penalty = 25.0;
     // double travel_penalty = 10.0;
 
     for (const auto& stat : points_) {
-        f += dist_penalty * stat.distance_to_goal;
+        f += ((stat.total_lin_speed / stat.total_cycles) < SPEED_THRESHOLD)? low_speed_penalty : 0.0;
+        f += ang_speed_penalty * stat.ang_speed;
+        f += lin_speed_penalty * stat.lin_speed;
+        f += dist_penalty + stat.distance_to_goal;
         f += time_penalty * (stat.total_cycles / 10.0);
         f += 100.0 * stat.total_rotations / 2*M_PI;
-        f += 10.0 * stat.distance_traveled / radius_; // for non-equidistant setpoints need to normalize!
-        double jerk = stat.total_jerk / 10.0;
-        f += (jerk > 3.0)? jerk * jerk_penalty : jerk;
+        // f += 1000.0 * stat.total_rotations / 2*M_PI;
+        f += 1.5 * stat.distance_traveled / radius_; // for non-equidistant setpoints need to normalize!
+        // double jerk = stat.total_jerk / 10.0;
+        // f += (jerk > 3.0)? jerk * jerk_penalty : jerk;
         f += stat.reached? 0 : fail_penalty;
-        RCLCPP_INFO(this->get_logger(), "dist_to_goal:{%f}, total_cycles:{%d}, distance_traveled:{%f}\ntotal_rotations:{%f}, total_jerk:{%f}, reached:{%d}", stat.distance_to_goal, stat.total_cycles, stat.distance_traveled, stat.total_rotations, stat.total_jerk, stat.reached);
+        RCLCPP_INFO(this->get_logger(), "dist_to_goal:{%f}, total_cycles:{%d}, distance_traveled:{%f}\ntotal_rotations:{%f}, total_jerk:{%f}, total_lin_speed:{%f}, reached:{%d}", stat.distance_to_goal, stat.total_cycles, stat.distance_traveled, stat.total_rotations, stat.total_jerk, stat.total_lin_speed/stat.total_cycles, stat.reached);
     }
     f /= points_.size();
     return 1 / f;
@@ -187,13 +222,21 @@ double Simulation<G>::get_distance(geometry_msgs::msg::Point& p1, geometry_msgs:
 template <class G>
 void Simulation<G>::simulation_run()
 {
+    static size_t EPOCH = 0;
+
     this->timer_->cancel();
     rclcpp::Rate rate(1s);
-    double speed = 3.0; // TMP
+    double speed = 1.5; // TMP
     double allowance_time = 5.0; // TMP
+
+    RCLCPP_INFO(this->get_logger(), "EPOCH #%ld", EPOCH++);
+
+    while (!this->get_clock()->ros_time_is_active()) {
+        RCLCPP_INFO(this->get_logger(), "ROS2 time not active, waiting again...");
+        rate.sleep();
+    }
     
     std::vector<G>& population = evolver_.get_population();
-    // std::vector<Genome<double, 2>>& population = evolver_.get_population();
     assert(population.size() == P_);
 
     auto setpoints = generate_equidistant_setpoints();
@@ -206,6 +249,7 @@ void Simulation<G>::simulation_run()
             rclcpp::shutdown();
         }
         RCLCPP_INFO(this->get_logger(), "Speed service not available, waiting again...");
+        rate.sleep();
     }
     speed_client_->async_send_request(speed_req);
 
@@ -214,15 +258,15 @@ void Simulation<G>::simulation_run()
     for (size_t n=0; n<P_; ++n) {
         G& p = population[n];
         // Genome<double, 2>& p = population[n];
-    
-        request->k_l = p.genes_[0].raw_value;
-        request->k_ha = p.genes_[1].raw_value;
+        p.set_request(request);
+
         while (!config_client_->wait_for_service(1s)) {
             if (!rclcpp::ok()) {
                 RCLCPP_ERROR(this->get_logger(), "Interrupted while waiting for the configuration service. Exiting.");
                 rclcpp::shutdown();
             }
             RCLCPP_INFO(this->get_logger(), "Configuration service not available, waiting again...");
+            rate.sleep();
         }
         config_client_->async_send_request(request);
 
@@ -252,7 +296,8 @@ void Simulation<G>::simulation_run()
             double dist = get_distance(goal_msg.setpoint, pose);
 
             double timeout = dist / speed;
-            auto timeout_duration = std::chrono::duration<double>(timeout + allowance_time);
+            // auto timeout_duration = std::chrono::duration<double>(timeout + allowance_time);
+            auto timeout_duration = rclcpp::Duration::from_seconds(timeout + allowance_time);
 
             RCLCPP_DEBUG(this->get_logger(), "Sending goal...");
 
@@ -268,17 +313,21 @@ void Simulation<G>::simulation_run()
             //     RCLCPP_ERROR(this->get_logger(), "Failed to send goal");
             //     continue;
             // }
+
             auto goal_handle = goal_handle_future.get();
             if (!goal_handle)
             {
                 RCLCPP_ERROR(this->get_logger(), "Goal was rejected by the server");
+                rclcpp::shutdown(); // tmp
                 continue;
             }
 
-            auto start_time = std::chrono::steady_clock::now();
+            // auto start_time = std::chrono::steady_clock::now();
+            auto start_time = this->now();
 
             while (!finished_) {
-                auto current_time = std::chrono::steady_clock::now();
+                auto current_time = this->now();
+                // auto current_time = std::chrono::steady_clock::now();
                 if (current_time - start_time >= timeout_duration)
                 {
                     RCLCPP_DEBUG(this->get_logger(), "Goal timeout! Canceling goal...");
@@ -296,7 +345,6 @@ void Simulation<G>::simulation_run()
 
                     break;
                 }
-                RCLCPP_DEBUG(this->get_logger(), "Waiting...:");
                 rate.sleep();
             }
             while (!finished_) rate.sleep();
@@ -311,7 +359,7 @@ void Simulation<G>::simulation_run()
         }
         double fitness = get_fitness();
         p.fitness = fitness;
-        RCLCPP_INFO(this->get_logger(), "Candidate: K_l: {%f}, K_ha: {%f}, Fitness: {%f}", request->k_l, request->k_ha, fitness);
+        RCLCPP_INFO(this->get_logger(), "Candidate fitness: {%f}", fitness);
         // points_.clear(); // tmp
     }
     
@@ -340,7 +388,7 @@ void Simulation<G>::goal_response_callback(std::shared_ptr<GoalHandleSetpoint> f
 template <class G>
 void Simulation<G>::feedback_callback(GoalHandleSetpoint::SharedPtr, const std::shared_ptr<const Setpoint::Feedback> feedback)
 { 
-    RCLCPP_DEBUG(this->get_logger(), "reached: {x:%f, y:%f}", feedback->current_pose.position.x, feedback->current_pose.position.y);
+    RCLCPP_DEBUG(this->get_logger(), "reached: {x:%f, y:%f}", feedback->current_pose.pose.position.x, feedback->current_pose.pose.position.y);
 }
 
 template <class G>
@@ -368,5 +416,3 @@ void Simulation<G>::result_callback(const GoalHandleSetpoint::WrappedResult & re
 
 #endif
 
-// template <class G>
-// RCLCPP_COMPONENTS_REGISTER_NODE(Simulation<G>)

@@ -12,6 +12,8 @@ find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
 	"msg/Stats.msg"
+	"msg/PConfig.msg"
+	"msg/CNNConfig.msg"
 	"action/Setpoint.action"
 	"srv/SetSpeed.srv"
 	"srv/SetConfig.srv"

@@ -1,8 +1,9 @@
 bool reached
-float64 speed
+float64 lin_speed
+float64 ang_speed
 float64 distance_to_goal
 float64 distance_traveled
 float64 total_rotations
 float64 total_jerk
+float64 total_lin_speed
 uint32 total_cycles
-geometry_msgs/Pose pose

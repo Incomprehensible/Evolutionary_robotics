@@ -30,7 +30,7 @@ Project contains two packages:
 ### P-controller
 P-controllers learn to control the robot with P-gains evolution.
 Configuration description for the P-controller:
-```C++
+```python
 # P-controller settings
 float64 k_l
 float64 k_ha
@@ -39,7 +39,7 @@ float64 k_ha
 ## Goal specification
 Current implementation of the basic usage case evolves the mobile robot controllers to steer to the goal.
 Communication between `Simulation` client and `Controller` worker server uses the action interface:
-```zsh
+```python
 # Define the goal
 geometry_msgs/Point setpoint
 ---
@@ -55,7 +55,7 @@ geometry_msgs/PoseStamped current_pose
 This controller uses a Convolutional Neural Network. Its genome is defined as a fixed topology neural network containing 3 hidden layers by 20 neurons. Two output neurons use sigmoid for linear speed and tahn for angular speed outputs. This topology and implementation can be customized, although there's no convenient way of doing it yet (you need to change it in the code).
 Genetic algorithm evolves the weights of the neural network which is encoded as a genome and expressed as a phenotype inside the `Controller` node. The phenotype is sent to the `Controller` as a configuration.
 Configuration description for the CNN-controller:
-```C++
+```python
 # CNN-controller config
 uint32 num_inputs
 uint32 num_outputs
@@ -64,6 +64,7 @@ uint32 neurons_per_hidden
 float64[] weights
 ```
 
+Below is the video demostration of the process. The rviz2 visualization uses robot's base_link frame as center of coordinates. White square represents the robot while blue dot is a goal from the randomly generated set.
 [![Watch how CNN-controllers evolve](https://img.youtube.com/vi/TGR7oGfYvO4/maxresdefault.jpg)](https://youtu.be/TGR7oGfYvO4)
 
 ## How to build

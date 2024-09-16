@@ -64,7 +64,7 @@ uint32 neurons_per_hidden
 float64[] weights
 ```
 
-[![Watch how CNN-controllers evolve]()](https://youtu.be/TGR7oGfYvO4)
+[![Watch how CNN-controllers evolve](https://img.youtube.com/vi/TGR7oGfYvO4/maxresdefault.jpg)](https://youtu.be/TGR7oGfYvO4)
 
 ## How to build
 Run from the project root directory:

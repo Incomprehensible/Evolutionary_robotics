@@ -64,7 +64,7 @@ uint32 neurons_per_hidden
 float64[] weights
 ```
 
-[![Watch how CNN-controllers evolve]()](Media/CNN_controllers.mp4)
+[![Watch how CNN-controllers evolve]()](https://youtu.be/TGR7oGfYvO4)
 
 ## How to build
 Run from the project root directory:
@@ -84,7 +84,7 @@ $ export GAZEBO_MODEL_PATH=$GAZEBO_MODEL_PATH:/opt/ros/humble/share/turtlebot3_g
 ## Further steps
 * Add visualization of graphs and statistics
 * Add extra functionality to export and load the previous session of controllers to continue the evolution using `Google Protobuf`.
-* Finally adding NEAT and rt-NEAT algorithms which were the main driven force behind the creation of this project.
+* Finally adding [NEAT](https://en.wikipedia.org/wiki/Neuroevolution_of_augmenting_topologies) and rt-NEAT algorithms which were the main driven force behind the creation of this project.
 * Implement use case of collision-free navigation using `Navigation2` framework.
 
 ## Current issues
